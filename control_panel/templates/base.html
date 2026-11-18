@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Workflow Control Panel{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='site.css') }}">
+  <script src="{{ url_for('static', path='app.js') }}" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-content">
+      <a class="brand" href="/">Method Statement Weekly Report</a>
+      <span class="version-badge" aria-label="Version 1 stable">V1 · Stable</span>
+      <nav aria-label="Primary navigation">
+        <a href="/">Dashboard</a>
+        <a href="/manual-run">Manual Run</a>
+        <a href="/report-history">Report History</a>
+        <a href="/ecm-period-report">ECM Period Report</a>
+        <a href="/history">Run history</a>
+      </nav>
+    </div>
+  </header>
+  <main class="shell">{% block content %}{% endblock %}</main>
+</body>
+</html>

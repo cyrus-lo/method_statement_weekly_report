@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}V2 Archived History · V3{% endblock %}
+{% block content %}
+<section class="hero"><p class="eyebrow">READ-ONLY · V2 ARCHIVE</p><h1>Archived Run History</h1><p>Imported V2 records and evidence are isolated from V3 periods and workflow gates.</p></section>
+{% if error %}<section class="notice error">{{ error }}</section>{% endif %}
+{% if not archive_available %}<section class="notice"><p>No V2 archive has been imported into this V3 installation.</p><form action="/archive/import" method="post" onsubmit="return confirm('Import V2 run history and evidence into the read-only V3 archive? This requires an empty archive destination.');"><button type="submit">Import V2 history once</button></form></section>{% else %}
+<section class="notice"><strong>Read-only archive.</strong> {{ runs|length }} latest runs shown; this archive cannot be used to satisfy V3 workflow gates. A repeat import is refused.</section>
+<section class="table-wrap"><table><thead><tr><th>Run</th><th>Workflow</th><th>Period</th><th>Status</th><th>Created (HKT)</th></tr></thead><tbody>{% for run in runs %}<tr><td><a href="/archive/runs/{{ run.id }}">#{{ run.id }}</a></td><td>{{ run.workflow_label }}</td><td>{{ run.start_date }} — {{ run.end_date }}</td><td>{{ run.state }}</td><td>{{ run.created_at | hkt }}</td></tr>{% else %}<tr><td colspan="5">The archive contains no runs.</td></tr>{% endfor %}</tbody></table></section>
+{% endif %}
+{% endblock %}

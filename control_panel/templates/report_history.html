@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+{% block title %}Report History · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">PERIOD FLOW</p>
+  <h1>Report History</h1>
+  <p>Track the four reporting workflows for each period. Dates lock after the first workflow starts so every step uses the same range.</p>
+</section>
+
+{% if error %}
+<section class="alert alert-error" role="alert"><strong>Period was not updated.</strong> {{ error }}</section>
+{% endif %}
+
+{% if configuration_errors %}
+<section class="alert alert-error" role="alert">
+  <h2>Local setup needs attention</h2>
+  <p>Periods can still be created, but resolve these items before starting a workflow.</p>
+  <ul>{% for item in configuration_errors %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section class="period-create-card" aria-labelledby="new-period-heading">
+  <div>
+    <p class="eyebrow">NEW PERIOD</p>
+    <h2 id="new-period-heading">Create a reporting period</h2>
+    <p>The suggested dates follow the Monday-to-Sunday calendar with month-end extensions. You may adjust dates before any workflow starts.</p>
+  </div>
+  <form action="/report-periods" method="post" class="period-create-form">
+    <div class="date-grid">
+      <label>Start date<input type="date" name="start_date" value="{{ default_start }}" required></label>
+      <label>End date<input type="date" name="end_date" value="{{ default_end }}" required></label>
+    </div>
+    <button type="submit">Create Period</button>
+  </form>
+</section>
+
+<section class="report-history-tabs" data-tabs>
+  <div class="tab-panels">
+  <div id="standard-view-panel" class="tab-panel" role="tabpanel" aria-labelledby="standard-view-tab" tabindex="0" hidden>
+    <section class="history-table-wrap report-history-table-wrap">
+    <table class="history-table report-history-table">
+  <colgroup>
+    <col class="period-column">
+    {% for workflow in report_workflows %}<col class="workflow-column">{% endfor %}
+    <col class="activity-column">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>Period</th>
+      {% for workflow in report_workflows %}<th>{{ workflow.label }}</th>{% endfor %}
+      <th>Last activity (HKT)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for summary in period_summaries %}
+    <tr>
+      <td class="period-cell">
+        {% if summary.is_locked %}
+        <strong>{{ summary.period.start_date }} — {{ summary.period.end_date }}</strong>
+        <span class="period-lock">Period locked after first workflow run</span>
+        {% else %}
+        <form action="/report-periods/{{ summary.period.id }}" method="post" class="period-edit-form">
+          <label>Start date<input type="date" name="start_date" value="{{ summary.period.start_date }}" required></label>
+          <label>End date<input type="date" name="end_date" value="{{ summary.period.end_date }}" required></label>
+          <button type="submit">Update Period</button>
+        </form>
+        <span class="period-edit-note">No workflow has started. Dates can be changed.</span>
+        {% endif %}
+        <form action="/report-periods/{{ summary.period.id }}/delete" method="post" class="period-delete-form" onsubmit="return confirm('Delete this report period? Its run history will be kept in Deleted View.');">
+          <button type="submit" class="button-danger">Delete period</button>
+        </form>
+      </td>
+      {% for workflow in report_workflows %}
+      {% set run = summary.runs[workflow.id] %}
+      <td class="workflow-status-cell">
+        <div class="workflow-status-content">
+        {% if run %}
+        <span class="status status-{{ run.state }}">{{ run.state }}</span>
+        <span class="workflow-timestamp">{% if run.finished_at %}Completed: {{ run.finished_at | hkt }}{% elif run.started_at %}Started: {{ run.started_at | hkt }}{% else %}Queued: {{ run.created_at | hkt }}{% endif %}</span>
+        <a href="/runs/{{ run.id }}">View run #{{ run.id }}</a>
+        {% if run.state in ['succeeded', 'failed'] %}
+        <form action="/report-periods/{{ summary.period.id }}/runs/{{ workflow.id }}" method="post" class="period-run-form">
+          <button type="submit" {% if active_run or configuration_errors %}disabled{% endif %}>{% if run.state == 'succeeded' %}Rerun{% else %}Retry{% endif %}</button>
+        </form>
+        {% endif %}
+        {% else %}
+        <span class="status status-pending">Pending</span>
+        <span class="workflow-timestamp">Queued: —</span>
+        <span class="workflow-run-link-placeholder">&nbsp;</span>
+        <form action="/report-periods/{{ summary.period.id }}/runs/{{ workflow.id }}" method="post" class="period-run-form">
+          <button type="submit" {% if active_run or configuration_errors %}disabled{% endif %}>Run workflow</button>
+        </form>
+        {% endif %}
+        </div>
+      </td>
+      {% endfor %}
+      <td>{{ summary.last_updated_at | hkt }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="empty-row">No report periods yet. Create one to start tracking the reporting flow.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</section>
+  </div>
+
+  <div id="detailed-view-panel" class="tab-panel" role="tabpanel" aria-labelledby="detailed-view-tab" tabindex="0">
+    <section class="history-table-wrap report-history-table-wrap">
+    <table class="history-table report-history-table">
+      <colgroup>
+        <col class="period-column">
+        {% for workflow in report_workflows %}<col class="workflow-column">{% endfor %}
+        <col class="activity-column">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Period</th>
+          {% for workflow in report_workflows %}<th>{{ workflow.label }}</th>{% endfor %}
+          <th>Last activity (HKT)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for summary in period_summaries %}
+        <tr>
+          <td class="period-cell">
+            {% if summary.is_locked %}
+            <strong>{{ summary.period.start_date }} — {{ summary.period.end_date }}</strong>
+            <span class="period-lock">Period locked after first workflow run</span>
+            {% else %}
+            <form action="/report-periods/{{ summary.period.id }}" method="post" class="period-edit-form">
+              <label>Start date<input type="date" name="start_date" value="{{ summary.period.start_date }}" required></label>
+              <label>End date<input type="date" name="end_date" value="{{ summary.period.end_date }}" required></label>
+              <button type="submit">Update Period</button>
+            </form>
+            <span class="period-edit-note">No workflow has started. Dates can be changed.</span>
+            {% endif %}
+            <form action="/report-periods/{{ summary.period.id }}/delete" method="post" class="period-delete-form" onsubmit="return confirm('Delete this report period? Its run history will be kept in Deleted View.');">
+              <button type="submit" class="button-danger">Delete period</button>
+            </form>
+          </td>
+          {% for workflow in report_workflows %}
+          {% set run = summary.runs[workflow.id] %}
+          <td class="workflow-status-cell">
+            <div class="workflow-status-content">
+            {% if run %}
+            <span class="status status-{{ run.state }}">{{ run.state }}</span>
+            {% if run.finished_at %}
+            <span class="workflow-timestamp">Completed: {{ run.finished_at | hkt }}</span>
+            {% elif run.started_at %}
+            <span class="workflow-timestamp">Started: {{ run.started_at | hkt }}</span>
+            {% else %}
+            <span class="workflow-timestamp">Queued: {{ run.created_at | hkt }}</span>
+            {% endif %}
+            <a href="/runs/{{ run.id }}">View run #{{ run.id }}</a>
+            {% if run.state in ['succeeded', 'failed'] %}
+            <form action="/report-periods/{{ summary.period.id }}/runs/{{ workflow.id }}" method="post" class="period-run-form">
+              <button type="submit" {% if active_run or configuration_errors %}disabled{% endif %}>{% if run.state == 'succeeded' %}Rerun{% else %}Retry{% endif %}</button>
+            </form>
+            {% endif %}
+            {% else %}
+            <span class="status status-pending">Pending</span>
+            <span class="workflow-timestamp">Queued: —</span>
+            <span class="workflow-run-link-placeholder">&nbsp;</span>
+            <form action="/report-periods/{{ summary.period.id }}/runs/{{ workflow.id }}" method="post" class="period-run-form">
+              <button type="submit" {% if active_run or configuration_errors %}disabled{% endif %}>Run workflow</button>
+            </form>
+            {% endif %}
+            </div>
+          </td>
+          {% endfor %}
+          <td>{{ summary.last_updated_at | hkt }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-row">No report periods yet. Create one to start tracking the reporting flow.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </section>
+  </div>
+
+  <div id="deleted-view-panel" class="tab-panel" role="tabpanel" aria-labelledby="deleted-view-tab" tabindex="0" hidden>
+    <section class="history-table-wrap report-history-table-wrap">
+    <table class="history-table report-history-table">
+      <colgroup>
+        <col class="period-column">
+        {% for workflow in report_workflows %}<col class="workflow-column">{% endfor %}
+        <col class="activity-column">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>Deleted period</th>
+          {% for workflow in report_workflows %}<th>{{ workflow.label }}</th>{% endfor %}
+          <th>Last activity (HKT)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for summary in deleted_period_summaries %}
+        <tr>
+          <td class="period-cell">
+            <strong>{{ summary.period.start_date }} — {{ summary.period.end_date }}</strong>
+            <span class="period-deleted">Deleted period. Workflow history is preserved.</span>
+            <form action="/report-periods/{{ summary.period.id }}/restore" method="post" class="period-restore-form">
+              <button type="submit">Restore period</button>
+            </form>
+          </td>
+          {% for workflow in report_workflows %}
+          {% set run = summary.runs[workflow.id] %}
+          <td class="workflow-status-cell">
+            <div class="workflow-status-content">
+            {% if run %}
+            <span class="status status-{{ run.state }}">{{ run.state }}</span>
+            <span class="workflow-timestamp">{% if run.finished_at %}Completed: {{ run.finished_at | hkt }}{% elif run.started_at %}Started: {{ run.started_at | hkt }}{% else %}Queued: {{ run.created_at | hkt }}{% endif %}</span>
+            <a href="/runs/{{ run.id }}">View run #{{ run.id }}</a>
+            {% else %}
+            <span class="status status-pending">Pending</span>
+            <span class="workflow-timestamp">No workflow run.</span>
+            {% endif %}
+            </div>
+          </td>
+          {% endfor %}
+          <td>{{ summary.last_updated_at | hkt }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-row">No deleted report periods.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </section>
+  </div>
+  </div>
+
+  <div class="tab-list" role="tablist" aria-label="Report history views" aria-orientation="horizontal">
+    <button id="standard-view-tab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="standard-view-panel" tabindex="-1">Standard view</button>
+    <button id="detailed-view-tab" class="tab-button" type="button" role="tab" aria-selected="true" aria-controls="detailed-view-panel">Detailed view</button>
+    <button id="deleted-view-tab" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="deleted-view-panel" tabindex="-1">Deleted view</button>
+  </div>
+</section>
+{% endblock %}

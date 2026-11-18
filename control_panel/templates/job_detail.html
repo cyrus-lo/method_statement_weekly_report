@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Run #{{ run.id }} · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <a class="back-link" href="{{ run_origin }}">← {{ run_origin_label }}</a>
+  <div class="heading-row">
+    <div>
+      <p class="eyebrow">RUN #{{ run.id }}</p>
+      <h1>{{ run.workflow_label }}</h1>
+      <p>{{ run.start_date }} to {{ run.end_date }}</p>
+    </div>
+    <span id="run-state" class="status status-{{ run.state }}">{{ run.state }}</span>
+  </div>
+</section>
+
+<section class="run-summary">
+  <div><span>Created (HKT)</span><strong>{{ run.created_at }}</strong></div>
+  <div><span>Started (HKT)</span><strong id="started-at">{{ run.started_at or 'Waiting to start' }}</strong></div>
+  <div><span>Finished (HKT)</span><strong id="finished-at">{{ run.finished_at or 'In progress' }}</strong></div>
+  <div><span>Exit code</span><strong id="exit-code">{{ run.exit_code if run.exit_code is not none else '—' }}</strong></div>
+</section>
+
+{% if run.error_summary %}<section id="run-error" class="alert alert-error" role="alert"><strong>Run failed.</strong> {{ run.error_summary }}</section>{% else %}<section id="run-error" class="alert alert-error hidden" role="alert"></section>{% endif %}
+
+<section class="detail-grid" data-run-id="{{ run.id }}" data-run-state="{{ run.state }}">
+  <article class="detail-card">
+    <h2>Next required action</h2>
+    <p>{{ workflow.next_action }}</p>
+    {% if workflow.id == 'ecm-step-1a' %}
+    <p class="callout"><strong>Manual handoff:</strong> close the completed run, open the ECM workbook in Excel, and complete each required Remark date before running Step 1b.</p>
+    {% endif %}
+  </article>
+  <article class="detail-card artifacts-card">
+    <h2>Saved artifacts</h2>
+    <ul id="artifact-list" class="artifact-list">
+      {% for artifact in artifacts %}
+      <li><a href="/runs/{{ run.id }}/artifacts/{{ artifact.id }}">{{ artifact.name }} <span>{{ artifact.stored_path.name }}</span></a></li>
+      {% else %}<li class="empty-artifacts">Artifacts appear after a successful run.</li>{% endfor %}
+    </ul>
+  </article>
+</section>
+
+<section class="log-section">
+  <div class="log-heading"><h2>Run log</h2><span id="log-refresh">{% if run.is_active %}Refreshing…{% else %}Complete{% endif %}</span></div>
+  <pre id="run-log">{{ log }}</pre>
+</section>
+{% endblock %}

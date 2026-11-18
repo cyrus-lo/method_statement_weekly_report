@@ -1,15 +1,3 @@
-# Exclude V1 app/UI and V3, but keep control_panel/services/ required by V2
-/control_panel/*
-!/control_panel/__init__.py
-!/control_panel/services/
-/control_panel/services/*
-!/control_panel/services/__init__.py
-!/control_panel/services/config.py
-!/control_panel/services/history.py
-!/control_panel/services/runner.py
-!/control_panel/services/workflows.py
-control_panel_v3/
-
 # Virtual environments & Python caches
 .venv/
 **/.venv/

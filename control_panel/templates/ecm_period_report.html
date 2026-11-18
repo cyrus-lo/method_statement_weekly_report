@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}ECM Period Report · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">ECM AGGREGATION · V1</p>
+    <h1>Create an ECM monthly or quarterly report</h1>
+    <p class="lede">Append approved ECM sheets, apply the Step 2 classifications, and create new WIP output sheets in the current ECM and SMM workbooks.</p>
+  </div>
+  {% if active_run %}<a class="active-run" href="/runs/{{ active_run.id }}?origin=/ecm-period-report"><span class="pulse"></span> Run #{{ active_run.id }} is {{ active_run.state }}</a>{% endif %}
+</section>
+{% if configuration_errors %}<section class="alert alert-error" role="alert"><h2>Local setup needs attention</h2><ul>{% for item in configuration_errors %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
+{% if error %}<section class="alert alert-error" role="alert"><strong>Report not started.</strong> {{ error }}</section>{% endif %}
+<section class="panel">
+  <h2>Select reporting period</h2>
+  <p class="muted">Use the first and last calendar date of the month or quarter. Source selection is based on approved <strong>(OK)</strong> sheets; <strong>(WIP)</strong> sheets are never used.</p>
+  <form action="/ecm-period-report" method="get" class="run-form">
+    <div class="date-grid">
+      <label>Start date<input type="date" name="start_date" value="{{ start_date }}" required></label>
+      <label>End date<input type="date" name="end_date" value="{{ end_date }}" required></label>
+    </div>
+    <button type="submit">Find approved source sheets</button>
+  </form>
+  {% if preview_error %}<section class="alert alert-error" role="alert">{{ preview_error }}</section>{% endif %}
+  {% if source_sheets %}
+  <form action="/ecm-period-report/run" method="post" class="run-form">
+    <input type="hidden" name="start_date" value="{{ start_date }}"><input type="hidden" name="end_date" value="{{ end_date }}">
+    <h3>Approved source sheets</h3>
+    <table class="source-table" data-source-list>
+      <thead><tr><th><input type="checkbox" id="select-all-sources" data-select-all-sources aria-label="Select all source sheets"></th><th>Source worksheet</th><th>Detected period</th></tr></thead>
+      <tbody>{% for source in source_sheets %}<tr><td><input type="checkbox" name="source_sheet" value="{{ source.name }}" data-source-sheet {% if source.selected %}checked{% endif %} aria-label="Select {{ source.name }}"></td><td>{{ source.name }}</td><td>{% if source.period %}{{ source.period }}{% else %}<span class="muted">Period not detected; review manually</span>{% endif %}</td></tr>{% endfor %}</tbody>
+    </table>
+    <p class="confirmation">Review the selected (OK) sheets. Restore previous generated sheets and close both workbooks. Both backups are created before either workbook is written.</p>
+    <button type="submit" {% if active_run or configuration_errors %}disabled{% endif %}>{% if active_run %}Another workflow is running{% else %}Run ECM period report{% endif %}</button>
+  </form>
+  {% elif start_date and end_date and not preview_error %}<p class="muted">No approved (OK) source sheets were found.</p>{% endif %}
+</section>
+<section class="path-note"><h2>Target workbooks</h2><dl><div><dt>ECM workbook</dt><dd>{{ settings.ecm_record }}</dd></div><div><dt>SMM workbook</dt><dd>{{ settings.smm_record }}</dd></div></dl></section>
+{% endblock %}

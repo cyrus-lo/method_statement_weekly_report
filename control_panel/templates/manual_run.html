@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Manual Run · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="eyebrow">MANUAL OPERATION · ONE WORKSTATION</p>
+    <h1>Run the weekly reporting workflow manually</h1>
+    <p class="lede">Choose a workflow, confirm its dates and prerequisites, then start it when you are ready. Jobs run one at a time, capture a complete log, and retain copies of generated workbooks.</p>
+  </div>
+  {% if active_run %}
+  <a class="active-run" href="/runs/{{ active_run.id }}?origin=/manual-run"><span class="pulse"></span> Run #{{ active_run.id }} is {{ active_run.state }}</a>
+  {% else %}
+  <div class="ready-state"><span class="ready-dot"></span> Ready for one workflow</div>
+  {% endif %}
+</section>
+
+{% if configuration_errors %}
+<section class="alert alert-error" role="alert">
+  <h2>Local setup needs attention</h2>
+  <p>Resolve these items in the local control-panel configuration before running a workflow.</p>
+  <ul>{% for item in configuration_errors %}<li>{{ item }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if error %}
+<section class="alert alert-error" role="alert"><strong>Workflow not started.</strong> {{ error }}</section>
+{% endif %}
+
+<section class="workflow-grid" aria-label="Manual workflow actions">
+  {% for workflow in workflows %}
+  <article class="workflow-card {% if workflow.id.startswith('ecm') %}ecm-card{% endif %}">
+    <div class="card-topline">
+      <span class="step-badge">{% if workflow.id == 'weekly-report' %}REPORT{% else %}{{ workflow.id.replace('ecm-step-', 'ECM ') }}{% endif %}</span>
+      {% if workflow.modifies_workbooks %}<span class="muted-label">Updates workbook</span>{% endif %}
+    </div>
+    <h2>{{ workflow.label }}</h2>
+    <p class="card-description">{{ workflow.short_description }}</p>
+    <div class="callout"><strong>Before you run</strong><br>{{ workflow.prerequisite }}</div>
+    <form action="/runs/{{ workflow.id }}" method="post" class="run-form">
+      <input type="hidden" name="origin" value="/manual-run">
+      <div class="date-grid">
+        <label>Start date<input type="date" name="start_date" value="{{ default_start }}" required></label>
+        <label>End date<input type="date" name="end_date" value="{{ default_end }}" required></label>
+      </div>
+      {% if workflow.modifies_workbooks %}
+      <p class="confirmation">This updates a persistent workbook after the workflow creates its normal backup.</p>
+      {% endif %}
+      <button type="submit" {% if active_run or configuration_errors %}disabled{% endif %}>
+        {% if active_run %}Another workflow is running{% elif configuration_errors %}Resolve setup issues{% else %}Run workflow{% endif %}
+      </button>
+    </form>
+    <p class="next-action"><span>After success</span> {{ workflow.next_action }}</p>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="path-note">
+  <h2>Configured operational locations</h2>
+  <dl>
+    <div><dt>Weekly reports</dt><dd>{{ settings.django_output_dir }}</dd></div>
+    <div><dt>ECM review workbook</dt><dd>{{ settings.ecm_record }}</dd></div>
+    <div><dt>SMM working workbook</dt><dd>{{ settings.smm_record }}</dd></div>
+  </dl>
+</section>
+{% endblock %}

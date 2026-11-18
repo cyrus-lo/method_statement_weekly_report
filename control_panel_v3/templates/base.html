@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Workflow Control Panel V3{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='site.css') }}">
+</head>
+<body>
+  <header class="topbar"><a href="/" class="brand">Method Statement <span>V3</span></a><nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/report-history">Report History</a><a href="/history">V3 Run History</a><a href="/archive">V2 Archive</a></nav><form action="/mode/toggle" method="post" class="inline mode-form"><input type="hidden" name="return_to" value="{{ request.url.path }}"><button class="mode" type="submit">{% if preview_only %}PREVIEW · switch to live{% else %}LIVE · switch to preview{% endif %}</button></form></header>
+  <main class="shell">{% block content %}{% endblock %}</main>
+</body>
+</html>

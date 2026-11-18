@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}V3 Dashboard · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="hero"><p class="eyebrow">ISOLATED WORKFLOW OPERATIONS</p><h1>V3 period dashboard</h1><p>V3 uses separate working files, history, profiles, and worker processes. Preview mode does not execute workflows.</p></section>
+{% if error %}<section class="alert">{{ error }}</section>{% endif %}
+{% if configuration_errors %}<section class="alert"><strong>Configuration needs attention</strong><ul>{% for item in configuration_errors %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
+{% for item in periods %}{% if item.attention %}<section class="attention"><strong>Period #{{ item.period.id }} · {{ item.period.start_date }} — {{ item.period.end_date }}</strong><span>{{ item.attention }}</span></section>{% endif %}{% endfor %}
+<section class="period-grid" aria-label="Reporting periods">
+{% for item in periods %}<article class="card"><header><div><p class="eyebrow">PERIOD #{{ item.period.id }}</p><h2>{{ item.period.start_date }} — {{ item.period.end_date }}</h2><small>Last activity: {{ item.summary.last_updated_at | hkt }}</small></div><span class="badge">{{ item.ecm_status }}</span></header><p>{{ item.next_action }}</p><div class="flow"><h3>ECM workflow</h3><ol>{% for key,label in [('ecm-step-0','Step 0 · Export'),('ecm-step-1a','Step 1a · Review workbook'),('ecm-first-date-lookup','First-date lookup'),('ecm-step-1b','Step 1b · Finalize'),('manual-decisions','Manual Use SMM / Use KMS'),('ecm-step-2','Step 2 · SMM summary')] %}<li>{{ label }}{% set run=item.runs.get(key) %}{% if run %}<span>{{ run.state }} · <a href="/runs/{{ run.id }}">Run #{{ run.id }}</a></span>{% else %}<span>Not started / manual checkpoint</span>{% endif %}</li>{% endfor %}</ol></div><p><strong>Weekly report:</strong> {{ item.weekly_status }}{% set weekly=item.runs.get('weekly-report') %}{% if weekly %} · <a href="/runs/{{ weekly.id }}">View run</a>{% endif %}</p><a class="button" href="/report-history">Open period controls</a></article>{% else %}<article class="card"><h2>No V3 periods yet</h2><p>Create a reporting period to begin.</p></article>{% endfor %}
+</section>
+{% endblock %}

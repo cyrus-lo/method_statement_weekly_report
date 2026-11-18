@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Archived Run #{{ run.id }} · V3{% endblock %}
+{% block content %}
+<section class="hero"><p class="eyebrow">READ-ONLY V2 ARCHIVE · RUN #{{ run.id }}</p><h1>{{ run.workflow_label }}</h1><p>{{ run.start_date }} — {{ run.end_date }} · {{ run.state }}</p><p><a href="/archive">← Archived history</a></p></section>
+<section class="panel"><h2>Run details</h2><dl><dt>Created</dt><dd>{{ run.created_at | hkt }}</dd><dt>Started</dt><dd>{{ run.started_at | hkt if run.started_at else "—" }}</dd><dt>Finished</dt><dd>{{ run.finished_at | hkt if run.finished_at else "—" }}</dd><dt>Exit code</dt><dd>{{ run.exit_code if run.exit_code is not none else "—" }}</dd><dt>Error</dt><dd>{{ run.error_summary or "—" }}</dd></dl></section>
+<section class="panel"><h2>Archived artifacts</h2><ul>{% for artifact in artifacts %}<li><a href="/archive/runs/{{ run.id }}/artifacts/{{ artifact.id }}">{{ artifact.name }}</a> ({{ artifact.size_bytes }} bytes)</li>{% else %}<li>No artifacts recorded.</li>{% endfor %}</ul></section>
+<section class="panel"><h2>Archived log</h2><pre class="log">{{ log }}</pre></section>
+{% endblock %}
