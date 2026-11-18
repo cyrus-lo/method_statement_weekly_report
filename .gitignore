@@ -1,0 +1,48 @@
+# Exclude V1 app/UI and V3, but keep control_panel/services/ required by V2
+/control_panel/*
+!/control_panel/__init__.py
+!/control_panel/services/
+/control_panel/services/*
+!/control_panel/services/__init__.py
+!/control_panel/services/config.py
+!/control_panel/services/history.py
+!/control_panel/services/runner.py
+!/control_panel/services/workflows.py
+control_panel_v3/
+
+# Virtual environments & Python caches
+.venv/
+**/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Environment variables & secrets
+.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Browser profiles & auth sessions
+.step0-edge-profile*/
+**/.step0-edge-profile*/
+**/edge-profile*/
+
+# Runtime data, SQLite history & backups
+output/
+**/data/
+**/data.before-*/
+**/archive/
+
+# ECM raw exports, diagnostics & generated test workbooks
+ecm/csv_from_ecm/*.csv
+ecm/csv_from_ecm/.step0-diagnostics/
+ecm/step0-diagnostic.png
+ecm/tests/generated_workbooks/
+
+# Scratch / temporary files & Excel lock files
+~$*.xlsx
+*.lnk
+test.json
+hello.py
+steps copy.md

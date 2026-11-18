@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Dashboard V2 Preview · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="hero">
+  <div><p class="eyebrow">PERIOD-FIRST OPERATIONS</p><h1>Workflow status by reporting period.</h1><p class="lede">V2 tracks each reporting period independently. Step 0 exports that period's ECM properties CSV before its workbook review steps.</p></div>
+  <div class="preview-state">{% if preview_only %}V2 Preview<br><strong>Execution remains in V1</strong>{% else %}V2 Execution<br><strong>Period workflow enabled</strong>{% endif %}</div>
+</section>
+
+{% if configuration_errors %}<section class="alert alert-error"><strong>V2 configuration needs attention.</strong><ul>{% for item in configuration_errors %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
+{% if unassigned_run_count %}<section class="alert alert-info"><strong>{{ unassigned_run_count }} unassigned run(s)</strong> remain visible in Run History but are excluded from period progress.</section>{% endif %}
+
+{% for item in periods %}
+  {% if item.attention %}<section class="attention"><strong>Attention · Period #{{ item.period.id }} ({{ item.period.start_date }} — {{ item.period.end_date }})</strong><span>{{ item.attention }}</span></section>{% endif %}
+{% endfor %}
+
+<section class="period-list" aria-label="Reporting period operational overview">
+{% for item in periods %}
+  <article class="period-panel">
+    <header class="period-heading"><div><p class="eyebrow">PERIOD #{{ item.period.id }}</p><h2>{{ item.period.start_date }} — {{ item.period.end_date }}</h2><p>Last activity: {{ item.summary.last_updated_at | hkt }}</p></div><span class="status status-{{ item.ecm_status|lower|replace(' ', '-')|replace('—', '-') }}">ECM · {{ item.ecm_status }}</span></header>
+    <div class="period-columns">
+      <section class="workflow-summary"><h3>Weekly Method Statement Report</h3><p class="status-line"><strong>Status:</strong> {{ item.weekly_status }}</p>{% set report = item.runs['weekly-report'] %}{% if report %}<a href="/runs/{{ report.id }}">View Run #{{ report.id }}</a>{% endif %}<button disabled>{% if preview_only %}Preview only — execution remains in V1{% else %}Managed separately from the ECM period workflow{% endif %}</button></section>
+      <section class="workflow-summary"><h3>ECM Workflow</h3><p class="status-line"><strong>Status:</strong> {{ item.ecm_status }}</p><p>{{ item.next_action }}</p></section>
+    </div>
+    <ol class="stepper">
+      {% for workflow_id, label in [('ecm-step-0', 'Step 0 — Export Properties'), ('ecm-step-1a', 'Step 1a — Create Review'), ('manual-remark', 'Manual Remark Review'), ('ecm-step-1b', 'Step 1b — Finalize Review'), ('manual-decisions', 'Manual Use SMM / Use KMS'), ('ecm-step-2', 'Step 2 — Create SMM Summary')] %}
+      {% set run = item.runs.get(workflow_id) %}
+      <li><strong>{{ label }}</strong>{% if run %}<span>{{ run.state }} · <a href="/runs/{{ run.id }}">Run #{{ run.id }}</a></span>{% elif workflow_id.startswith('manual') %}<span>Manual checkpoint</span>{% else %}<span>Not started</span>{% endif %}</li>
+      {% endfor %}
+    </ol>
+    <div class="period-actions"><a class="button-link" href="/report-history">Open period workflow controls</a></div>
+  </article>
+{% else %}
+  <section class="empty-state"><h2>No reporting periods in V2 yet</h2><p>Import V1 history into the empty V2 data directory, then reload this page.</p></section>
+{% endfor %}
+</section>
+{% endblock %}

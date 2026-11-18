@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Run History V2 Preview · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="page-heading"><p class="eyebrow">COPIED LOCAL RECORD</p><h1>Run History</h1><p>All imported and future V2 run records are retained here.</p></section>
+<section class="history-table-wrap"><table class="history-table"><thead><tr><th>Run</th><th>Workflow</th><th>Period</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>{% for run in runs %}<tr><td>#{{ run.id }}</td><td>{{ run.workflow_label }}</td><td>{% if run.period_id %}Period #{{ run.period_id }}{% else %}Unassigned{% endif %}<br>{{ run.start_date }} — {{ run.end_date }}</td><td><span class="status">{{ run.state }}</span></td><td>{{ run.created_at | hkt }}</td><td><a href="/runs/{{ run.id }}">View run</a></td></tr>{% else %}<tr><td colspan="6" class="empty-row">No copied runs yet.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

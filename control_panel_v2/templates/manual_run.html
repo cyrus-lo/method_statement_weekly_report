@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Manual Run V2 Preview · Workflow Control Panel{% endblock %}
+{% block content %}
+<section class="page-heading"><p class="eyebrow">AD-HOC OPERATION</p><h1>Manual Run</h1><p>Step 0 is intentionally available only from Report History because its dates must come from a locked reporting period.</p></section>
+<section class="workflow-grid">{% for workflow in workflows %}<article class="workflow-card"><span class="step-badge">{% if workflow.id == 'weekly-report' %}REPORT{% else %}{{ workflow.id.replace('ecm-step-', 'ECM ') }}{% endif %}</span><h2>{{ workflow.label }}</h2><p>{{ workflow.short_description }}</p><div class="callout"><strong>Preview only</strong><br>{{ workflow.prerequisite }}</div><button disabled>Preview only — run in V1</button></article>{% endfor %}</section>
+{% endblock %}

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Workflow Control Panel V2{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='site.css') }}?v=run-detail-actions-csv-view-1">
+  <script defer src="{{ url_for('static', path='app.js') }}?v=run-detail-actions-csv-view-1"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-content">
+      <a class="brand" href="/">Method Statement <span>V2</span></a>
+      <form action="/mode/toggle" method="post" class="mode-toggle-form">
+        <input type="hidden" name="return_to" value="{{ request.url.path }}">
+        <button type="submit" class="mode-toggle" aria-pressed="{{ 'false' if preview_only else 'true' }}" aria-label="{% if preview_only %}Switch to live execution mode{% else %}Switch to preview-only mode{% endif %}" title="{% if preview_only %}Switch to live execution mode{% else %}Switch to preview-only mode{% endif %}">{% if preview_only %}PREVIEW · READ ONLY{% else %}LIVE · EXECUTION ENABLED{% endif %}</button>
+      </form>
+      <nav aria-label="Primary navigation">
+        <a href="/">Dashboard</a><a href="/manual-run">Manual Run</a><a href="/report-history">Report History</a><a href="/history">Run History</a>
+      </nav>
+    </div>
+  </header>
+  <main class="shell">{% block content %}{% endblock %}</main>
+</body>
+</html>
