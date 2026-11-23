@@ -6,9 +6,8 @@ import os
 from datetime import date
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .config import CONTROL_PANEL_ROOT, Settings
+from .config import CONTROL_PANEL_ROOT, ConfigurationError, Settings, load_weekly_report_environment
 from .workflows import ArtifactSource, PreparedWorkflow, WORKFLOWS
 
 
@@ -60,21 +59,10 @@ def prepare_workflow(workflow_id: str, start: date, end: date, run_id: int, sett
         _require_v3_runtime(settings.python_executable, "Python interpreter")
         _require_v3_file(settings.weekly_worker_script, "weekly-report worker")
         _require_v3_file(settings.weekly_template_path, "weekly-report template")
-        if not settings.weekly_reporting_timezone:
-            raise PreflightError("CONTROL_PANEL_V3_WEEKLY_REPORTING_TIMEZONE must not be empty.")
-        database_environment = {
-            "CONTROL_PANEL_V3_WEEKLY_PGHOST": "PGHOST",
-            "CONTROL_PANEL_V3_WEEKLY_PGDATABASE": "PGDATABASE",
-            "CONTROL_PANEL_V3_WEEKLY_PGUSER": "PGUSER",
-            "CONTROL_PANEL_V3_WEEKLY_PGPASSWORD": "PGPASSWORD",
-        }
-        missing = [name for name in database_environment if not os.getenv(name, "").strip()]
-        if missing:
-            raise PreflightError("Set the V3 weekly database settings before running this workflow: " + ", ".join(missing))
         try:
-            ZoneInfo(settings.weekly_reporting_timezone)
-        except (ValueError, ZoneInfoNotFoundError) as error:
-            raise PreflightError(f"Invalid V3 weekly reporting timezone: {settings.weekly_reporting_timezone}") from error
+            weekly_environment = load_weekly_report_environment()
+        except ConfigurationError as error:
+            raise PreflightError(str(error)) from error
         output_dir = settings.django_output_dir / f"weekly-run-{run_id}"
         if not _inside(output_dir):
             raise PreflightError("V3 weekly-report output must remain under control_panel_v3.")
@@ -87,20 +75,7 @@ def prepare_workflow(workflow_id: str, start: date, end: date, run_id: int, sett
             "WINDIR": os.getenv("WINDIR", ""),
             "TEMP": os.getenv("TEMP", ""),
             "TMP": os.getenv("TMP", ""),
-            "PGHOST": "",
-            "PGDATABASE": "",
-            "PGUSER": "",
-            "PGPASSWORD": "",
-            "PGPORT": "",
-            "PGSSLMODE": "",
-            "REPORTING_TIMEZONE": "",
-            "CONTROL_PANEL_V3_WEEKLY_PGHOST": os.environ["CONTROL_PANEL_V3_WEEKLY_PGHOST"],
-            "CONTROL_PANEL_V3_WEEKLY_PGDATABASE": os.environ["CONTROL_PANEL_V3_WEEKLY_PGDATABASE"],
-            "CONTROL_PANEL_V3_WEEKLY_PGUSER": os.environ["CONTROL_PANEL_V3_WEEKLY_PGUSER"],
-            "CONTROL_PANEL_V3_WEEKLY_PGPASSWORD": os.environ["CONTROL_PANEL_V3_WEEKLY_PGPASSWORD"],
-            "CONTROL_PANEL_V3_WEEKLY_PGPORT": os.getenv("CONTROL_PANEL_V3_WEEKLY_PGPORT", "5432").strip() or "5432",
-            "CONTROL_PANEL_V3_WEEKLY_PGSSLMODE": os.getenv("CONTROL_PANEL_V3_WEEKLY_PGSSLMODE", "").strip(),
-            "CONTROL_PANEL_V3_WEEKLY_REPORTING_TIMEZONE": settings.weekly_reporting_timezone,
+            **weekly_environment,
         }
         return PreparedWorkflow(
             definition,
@@ -110,6 +85,9 @@ def prepare_workflow(workflow_id: str, start: date, end: date, run_id: int, sett
             environment_overrides=environment_overrides,
         )
     if workflow_id == "ecm-step-0":
+        step0_errors = settings.validate_step0()
+        if step0_errors:
+            raise PreflightError(" ".join(step0_errors))
         script = settings.step0_worker_script
         _require_v3_file(script, "Step 0 worker")
         _require_v3_runtime(settings.python_executable, "Python interpreter")
@@ -118,7 +96,9 @@ def prepare_workflow(workflow_id: str, start: date, end: date, run_id: int, sett
         diagnostics_dir = settings.runs_dir / str(run_id) / "diagnostics"
         if not _inside(output) or not _inside(period_input) or not _inside(settings.edge_profile_dir) or not _inside(diagnostics_dir):
             raise PreflightError("V3 Step 0 output and Edge profile must remain under control_panel_v3.")
-        command = [python, "-m", "control_panel_v3.workers.ecm_step0_export", "--start-date", start.isoformat(), "--end-date", end.isoformat(), "--output", str(output), "--period-input", str(period_input), "--ecm-url", settings.ecm_url, "--profile-dir", str(settings.edge_profile_dir), "--root-dir", str(CONTROL_PANEL_ROOT), "--timeout-seconds", str(settings.worker_timeout_seconds), "--login-if-needed"]
+        command = [python, "-m", "control_panel_v3.workers.ecm_step0_export", "--start-date", start.isoformat(), "--end-date", end.isoformat(), "--output", str(output), "--period-input", str(period_input), "--ecm-url", settings.ecm_url, "--profile-dir", str(settings.edge_profile_dir), "--root-dir", str(CONTROL_PANEL_ROOT), "--timeout-seconds", str(settings.step0_timeout_seconds), "--auth-timeout-seconds", str(settings.step0_auth_timeout_seconds), "--failure-browser-hold-seconds", str(settings.step0_failure_browser_hold_seconds)]
+        command.append("--headed" if settings.step0_headed else "--no-headed")
+        command.append("--login-if-needed" if settings.step0_login_if_needed else "--no-login-if-needed")
         command.extend(["--diagnostics-dir", str(diagnostics_dir)])
         if os.getenv("CONTROL_PANEL_V3_RESET_EDGE_PROFILE", "false").strip().casefold() in {"1", "true", "yes", "on"}:
             command.append("--reset-profile")

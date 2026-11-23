@@ -26,12 +26,29 @@
   if (!statusCard) return;
   const stateNode = document.querySelector("#run-state");
   const finishedNode = document.querySelector("#run-finished");
+  const exitCodeNode = document.querySelector("#exit-code");
+  const errorNode = document.querySelector("#run-error");
+  const refreshNode = document.querySelector("#log-refresh");
   const logNode = document.querySelector("#run-log");
   const artifactsNode = document.querySelector("#run-artifacts");
   let delay = 1000;
   let retryCount = 0;
   const maxRetries = 8;
   const maxDelay = 15000;
+  const formatHkt = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return `${new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Hong_Kong",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).format(date)} HKT`;
+  };
   const renderArtifacts = (items) => {
     if (!artifactsNode || !Array.isArray(items)) return;
     artifactsNode.replaceChildren();
@@ -52,6 +69,8 @@
         const view = document.createElement("a");
         view.href = `${download.href}/view`;
         view.textContent = "Open CSV";
+        view.target = "_blank";
+        view.rel = "noopener";
         li.append(separator, view);
       }
       artifactsNode.append(li);
@@ -64,18 +83,22 @@
       const payload = await response.json();
       retryCount = 0;
       delay = 1000;
-      if (stateNode) stateNode.textContent = payload.state;
-      if (finishedNode && payload.finished_at) finishedNode.textContent = payload.finished_at;
+      if (stateNode) {
+        stateNode.textContent = payload.state;
+        stateNode.className = `status status-${payload.state}`;
+      }
+      if (finishedNode && payload.finished_at) finishedNode.textContent = formatHkt(payload.finished_at);
+      if (exitCodeNode) exitCodeNode.textContent = payload.exit_code ?? "—";
       if (logNode && typeof payload.log === "string") logNode.textContent = payload.log;
+      if (refreshNode) refreshNode.textContent = "Refreshing…";
       renderArtifacts(payload.artifacts);
-      if (payload.error_summary && payload.state === "failed") {
-        const alert = document.createElement("p");
-        alert.className = "alert";
-        alert.textContent = payload.error_summary;
-        statusCard.append(alert);
+      if (errorNode && payload.error_summary && payload.state === "failed") {
+        errorNode.classList.remove("hidden");
+        errorNode.textContent = `Run failed. ${payload.error_summary}`;
       }
       if (["succeeded", "failed"].includes(payload.state)) {
         statusCard.dataset.active = "false";
+        if (refreshNode) refreshNode.textContent = payload.state === "failed" ? "Failed" : "Complete";
         window.location.reload();
         return;
       }

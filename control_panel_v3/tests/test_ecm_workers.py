@@ -22,14 +22,15 @@ from control_panel_v3.workers.ecm_outgoing_reference_lookup import (
     validate_workbook,
 )
 from control_panel_v3.workers.properties_csv import CSV_HEADERS, CsvValidationError, validate_properties_csv
+from control_panel_v3.workers.reference_normalization import outgoing_reference_without_revision
 
 
-def _write_csv(path: Path, *, reference: str = "REF/42", modified_on: str = "") -> None:
+def _write_csv(path: Path, *, reference: str = "REF/42", modified_on: str = "", revision: str = "A") -> None:
     row = {
         "Document title": "Method Statement",
         "Document date": "8/1/2026, 12:00 AM",
         "Name": "MS-42",
-        "Document revision": "A",
+        "Document revision": revision,
         "Modified By": "Operator",
         "Major Version": "1",
         "SMM ID": "SMM42",
@@ -55,6 +56,7 @@ def _write_workbook(path: Path, *, count: str = "", revision: str = "A") -> str:
     values = (1016, "Method Statement", date(2026, 8, 1), "MS-42", revision, "Operator", 1, "SMM42", count, None, None)
     for column, value in enumerate(values, start=1):
         sheet.cell(2, column).value = value
+    sheet.cell(2, OUTGOING_REFERENCE_COLUMN).value = "REF/42"
     workbook.save(path)
     workbook.close()
     return sheet.title
@@ -97,17 +99,22 @@ def test_step0_publication_failure_keeps_existing_period_handoff(tmp_path: Path,
     assert not handoff.with_name(f".{handoff.name}.publish").exists()
 
 
-def test_lookup_uses_exact_csv_reference_and_skips_count_n_or_blank_revision(tmp_path: Path) -> None:
+def test_lookup_uses_excel_reference_and_skips_count_n_or_blank_revision(tmp_path: Path) -> None:
     csv_path = tmp_path / "properties.csv"
     workbook_path = tmp_path / "ECM_Record.xlsx"
-    _write_csv(csv_path)
-    sheet_name = _write_workbook(workbook_path)
+    outgoing_reference = "CWCRCC(ND202404)JV/1131/CSF/MS/0283-2025(F"
+    normalized_reference = "CWCRCC(ND202404)JV/1131/CSF/MS/0283-2025"
+    _write_csv(csv_path, reference=outgoing_reference, revision="F")
+    sheet_name = _write_workbook(workbook_path, revision="F")
     workbook = load_workbook(workbook_path)
     try:
         sheet = workbook[sheet_name]
         ref_map = read_outgoing_reference_map(csv_path)
+        assert list(ref_map.values()) == [outgoing_reference]
         tasks = build_search_rows(sheet, ref_map)
         assert tasks == [(2, "REF/42")]
+        sheet.cell(2, OUTGOING_REFERENCE_COLUMN).value = outgoing_reference
+        assert build_search_rows(sheet, ref_map) == [(2, normalized_reference)]
 
         sheet.cell(2, COUNT_COLUMN).value = "N"
         assert build_search_rows(sheet, ref_map) == []
@@ -116,6 +123,41 @@ def test_lookup_uses_exact_csv_reference_and_skips_count_n_or_blank_revision(tmp
         assert build_search_rows(sheet, ref_map) == []
     finally:
         workbook.close()
+
+
+def test_lookup_rejects_blank_excel_reference_without_csv_fallback(tmp_path: Path) -> None:
+    csv_path = tmp_path / "properties.csv"
+    workbook_path = tmp_path / "ECM_Record.xlsx"
+    _write_csv(csv_path, reference="CSV/ONLY")
+    sheet_name = _write_workbook(workbook_path)
+    workbook = load_workbook(workbook_path)
+    try:
+        sheet = workbook[sheet_name]
+        sheet.cell(2, OUTGOING_REFERENCE_COLUMN).value = None
+        with pytest.raises(LookupError, match="blank Excel outgoing reference"):
+            build_search_rows(sheet, read_outgoing_reference_map(csv_path))
+    finally:
+        workbook.close()
+
+
+@pytest.mark.parametrize(
+    ("outgoing_reference", "revision", "expected"),
+    (
+        (
+            "CWCRCC(ND202404)JV/1131/CSF/MS/0283-2025(F",
+            "F",
+            "CWCRCC(ND202404)JV/1131/CSF/MS/0283-2025",
+        ),
+        ("REF/42/F", "F", "REF/42"),
+        ("REF/42(F)", "F", "REF/42"),
+        ("REF/42(F", "G", "REF/42(F"),
+        ("REF/42(F", "", "REF/42(F"),
+    ),
+)
+def test_outgoing_reference_normalization_removes_only_matching_terminal_revision(
+    outgoing_reference: str, revision: str, expected: str
+) -> None:
+    assert outgoing_reference_without_revision(outgoing_reference, revision) == expected
 
 
 def test_lookup_rerun_scopes_preserve_populated_remarks(tmp_path: Path) -> None:
@@ -185,6 +227,8 @@ def test_lookup_enforces_out_and_starts_with_criteria(monkeypatch: pytest.Monkey
 
         async def fill(self, value):
             self.filled = value
+            self.value = value
+            self.value = value
 
         async def dispatch_event(self, *_args):
             return None
@@ -208,6 +252,277 @@ def test_lookup_enforces_out_and_starts_with_criteria(monkeypatch: pytest.Monkey
     monkeypatch.setattr(lookup, "_control_metadata", metadata)
     asyncio.run(lookup._set_search_criteria(object(), "EXACT/REF"))
     assert reference.filled == "EXACT/REF"
+
+
+@pytest.mark.parametrize("operator_value", ["Starts With", "STARTSWITH"])
+def test_lookup_accepts_visible_and_hidden_starts_with_operator_values(
+    monkeypatch: pytest.MonkeyPatch, operator_value: str,
+) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+
+    class Control:
+        def __init__(self, value: str = "", *, control_id: str = "") -> None:
+            self.value = value
+            self.control_id = control_id
+            self.filled = None
+
+        async def input_value(self):
+            return self.value
+
+        async def fill(self, value):
+            self.filled = value
+            self.value = value
+            self.value = value
+
+        async def dispatch_event(self, *_args):
+            return None
+
+        async def press(self, *_args):
+            return None
+
+    direction = Control("OUT")
+    operator = Control(operator_value, control_id="OutgoingRefOperator")
+    reference = Control()
+
+    async def labeled(_form, label, *, include_operator=False, **_kwargs):
+        if label == "In/Out":
+            return [direction]
+        return [operator, reference] if include_operator else [reference]
+
+    async def metadata(control):
+        return {"id": control.control_id, "class_name": ""}
+
+    monkeypatch.setattr(lookup, "_labeled_controls", labeled)
+    monkeypatch.setattr(lookup, "_control_metadata", metadata)
+    asyncio.run(lookup._set_search_criteria(object(), "EXACT/REF"))
+    assert reference.filled == "EXACT/REF"
+
+
+def test_labeled_lookup_controls_include_operator_in_outgoing_reference_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_step0_export as step0
+
+    class Control:
+        def __init__(self, control_id: str, class_name: str = "", *, control_type: str = "text", aria_hidden: str | None = None) -> None:
+            self.control_id = control_id
+            self.class_name = class_name
+            self.control_type = control_type
+            self.aria_hidden = aria_hidden
+
+        async def is_visible(self):
+            return True
+
+        async def get_attribute(self, name):
+            if name == "type":
+                return self.control_type
+            if name == "aria-hidden":
+                return self.aria_hidden
+            return None
+
+    hover_help_button = Control("", "dijitOffScreen", control_type="button", aria_hidden="true")
+    operator_arrow = Control("", "dijitReset dijitInputField dijitArrowButtonInner", aria_hidden="true")
+    validation_icon = Control("", "dijitReset dijitInputField dijitValidationIcon dijitValidationInner")
+    operator = Control("widget_SearchCriterian_4Operator", "dijitComboBox operatorSelect")
+    reference = Control("ECM_OutRefNo", "dijitReset dijitInputInner")
+
+    class Locator:
+        def __init__(self, items):
+            self.items = items
+
+        async def count(self):
+            return len(self.items)
+
+        def nth(self, index):
+            return self.items[index]
+
+    class Row:
+        def locator(self, _selector):
+            return Locator([hover_help_button, operator, operator_arrow, validation_icon, reference])
+
+    class Rows(Locator):
+        def nth(self, index):
+            assert index == 0
+            return Row()
+
+    class Form:
+        def locator(self, selector):
+            if selector.startswith("input,textarea"):
+                return Locator([])
+            if selector.startswith('tr:has([name="ECM_OutRefNo"])'):
+                return Rows([Row()])
+            raise AssertionError(f"Unexpected selector: {selector}")
+
+    async def metadata(control):
+        return {"widget": control.control_id or f"w-{id(control)}", "id": control.control_id, "class_name": control.class_name}
+
+    monkeypatch.setattr(step0, "_control_metadata", metadata)
+    controls = asyncio.run(step0._labeled_controls(Form(), "Outgoing ref. no.", include_operator=True))
+    assert controls == [operator, reference]
+
+
+@pytest.mark.parametrize(
+    ("initial_value", "hidden_value", "should_select"),
+    [("", "", True), ("", "2", False), ("OUT", "2", False)],
+)
+def test_lookup_sets_blank_in_out_and_accepts_saved_out_key(
+    monkeypatch: pytest.MonkeyPatch, initial_value: str, hidden_value: str, should_select: bool,
+) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+
+    class Control:
+        def __init__(self, value: str = "", *, control_id: str = "", class_name: str = "", hidden: str = "") -> None:
+            self.value = value
+            self.control_id = control_id
+            self.class_name = class_name
+            self.hidden = hidden
+            self.filled = None
+            self.pressed: list[str] = []
+
+        async def input_value(self):
+            return self.value
+
+        async def evaluate(self, _script):
+            return self.hidden
+
+        async def fill(self, value):
+            self.filled = value
+
+        async def dispatch_event(self, event):
+            if event == "change" and self.filled:
+                self.value = self.filled
+                self.hidden = "2"
+            return None
+
+        async def press(self, key):
+            self.pressed.append(key)
+
+    direction = Control(initial_value, hidden=hidden_value)
+    operator = Control("STARTSWITH", control_id="", class_name="dijitComboBox operatorSelect")
+    reference = Control()
+
+    async def labeled(_form, label, *, include_operator=False, **_kwargs):
+        if label == "In/Out":
+            return [direction]
+        return [operator, reference] if include_operator else [reference]
+
+    async def metadata(control):
+        return {"id": control.control_id, "class_name": control.class_name}
+
+    monkeypatch.setattr(lookup, "_labeled_controls", labeled)
+    monkeypatch.setattr(lookup, "_control_metadata", metadata)
+    asyncio.run(lookup._set_search_criteria(object(), "EXACT/REF"))
+
+    assert "Enter" not in direction.pressed
+    assert (direction.filled == "OUT") is should_select
+    assert direction.hidden == ("2" if should_select or hidden_value == "2" else "")
+    assert reference.filled == "EXACT/REF"
+
+
+def test_lookup_expands_collapsed_search_criteria_and_handles_empty_results_pane(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+    import control_panel_v3.workers.ecm_step0_export as step0
+
+    collapsed = [True]
+    clicked_toggle = [False]
+
+    class ToggleButton:
+        async def is_visible(self):
+            return True
+
+    toggle_button = ToggleButton()
+
+    class CountLocator:
+        def __init__(self, count_fn, items=()):
+            self._count_fn = count_fn
+            self._items = items
+
+        async def count(self):
+            return self._count_fn()
+
+        def nth(self, index):
+            return self._items[index]
+
+    class EmptyPane:
+        async def is_visible(self):
+            return True
+
+        async def inner_text(self):
+            return "No results were found."
+
+    class CollapsiblePanel:
+        def locator(self, selector: str):
+            if selector == ".searchToggleArea.dijitHidden":
+                return CountLocator(lambda: 1 if collapsed[0] else 0)
+            if selector == '[data-dojo-attach-point="titleToggleNode"]':
+                return CountLocator(lambda: 1, [toggle_button])
+            if selector == '[data-dojo-attach-point="emptySearchResultsPane"]':
+                return CountLocator(lambda: 1, [EmptyPane()])
+            return CountLocator(lambda: 0)
+
+        def get_by_role(self, *_args, **_kwargs):
+            return CountLocator(lambda: 0)
+
+    async def fake_click(target, _timeout_ms: int) -> None:
+        assert target is toggle_button
+        clicked_toggle[0] = True
+        collapsed[0] = False
+
+    monkeypatch.setattr(step0, "click_control", fake_click)
+    panel = CollapsiblePanel()
+    asyncio.run(step0._ensure_lookup_criteria_expanded(panel, 1000))
+    assert clicked_toggle[0] is True
+    assert collapsed[0] is False
+
+    busy_checks = [0]
+
+    class BusyThenIdlePage:
+        async def evaluate(self, _script: str):
+            busy_checks[0] += 1
+            return busy_checks[0] == 1
+
+    monkeypatch.setattr(lookup.asyncio, "sleep", lambda _seconds: asyncio.Future())
+    # Use a real resolved coroutine for sleep in this isolated test.
+    async def fast_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(lookup.asyncio, "sleep", fast_sleep)
+    async def fresh_empty(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(lookup, "_wait_for_lookup_results", fresh_empty)
+    assert asyncio.run(lookup._read_oldest_result_date(
+        panel, BusyThenIdlePage(), 1000, before={}, query_id=1, row_number=2, outgoing_reference="REF/42"
+    )) is None
+
+
+def test_lookup_criteria_hydration_waits_for_required_properties(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_step0_export as step0
+
+    class Form:
+        async def evaluate(self, script: str):
+            assert "ECM_InOut" in script
+            assert "ECM_OutRefNo" in script
+            return {
+                "input_area_present": True,
+                "row_count": 2,
+                "visible_row_count": 2,
+                "missing_properties": [],
+            }
+
+    async def active_form(_panel):
+        return Form()
+
+    monkeypatch.setattr(step0, "_active_form", active_form)
+    asyncio.run(step0._wait_for_lookup_criteria_hydration(object(), 100))
 
 
 def test_lookup_reads_oldest_date_across_result_pages(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -307,9 +622,221 @@ def test_lookup_reads_oldest_date_across_result_pages(monkeypatch: pytest.Monkey
             return "The search returned 2 items"
 
     monkeypatch.setattr(lookup, "_visible_locators", lambda locator: asyncio.sleep(0, result=locator.items))
+    async def fresh_results(_panel, _page, _timeout, _before):
+        return True
+
+    async def page_snapshot(_panel, _page):
+        return {"busy": False, "mutations": 0, "text": "", "rows": [], "emptyText": ""}
+
+    monkeypatch.setattr(lookup, "_wait_for_lookup_results", fresh_results)
+    monkeypatch.setattr(lookup, "_lookup_results_snapshot", page_snapshot)
     panel, page = Panel(), Page()
-    result = asyncio.run(lookup._read_oldest_result_date(panel, page, 1000))
+    result = asyncio.run(lookup._read_oldest_result_date(
+        panel, page, 1000, before={}, query_id=1, row_number=2, outgoing_reference="REF/42"
+    ))
     assert result == date(2026, 8, 1)
+
+
+def test_lookup_wait_rejects_unchanged_visible_grid(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+
+    snapshot = {"busy": False, "text": "old result", "rows": ["old result"], "emptyText": ""}
+
+    async def read_snapshot(_panel, _page):
+        return snapshot
+
+    async def fast_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(lookup, "_lookup_results_snapshot", read_snapshot)
+    monkeypatch.setattr(lookup.asyncio, "sleep", fast_sleep)
+    with pytest.raises(LookupError, match="fresh completed result"):
+        asyncio.run(lookup._wait_for_lookup_results(object(), object(), 1, dict(snapshot)))
+
+
+def test_lookup_wait_accepts_updated_grid_after_busy_transition(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+
+    states = iter((
+        {"busy": True, "text": "old", "rows": ["header", "old"], "emptyText": ""},
+        {"busy": False, "text": "new", "rows": ["header", "new"], "emptyText": ""},
+    ))
+
+    async def read_snapshot(_panel, _page):
+        return next(states)
+
+    async def fast_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(lookup, "_lookup_results_snapshot", read_snapshot)
+    monkeypatch.setattr(lookup.asyncio, "sleep", fast_sleep)
+    assert asyncio.run(lookup._wait_for_lookup_results(
+        object(), object(), 100, {"busy": False, "text": "old", "rows": ["header", "old"], "emptyText": ""}
+    )) is True
+
+
+@pytest.mark.parametrize("already_open,already_selected", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize("apply_succeeds", [True, False])
+def test_lookup_opens_search_options_dialog_and_applies_version(monkeypatch: pytest.MonkeyPatch, already_open: bool, already_selected: bool, apply_succeeds: bool) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+
+    state = {"open": already_open, "selected": already_selected, "menu": False, "applied": False, "clicks": []}
+
+    class Collection:
+        def __init__(self, items):
+            self.items = items
+
+    class Element:
+        def __init__(self, name):
+            self.name = name
+
+        async def get_attribute(self, name):
+            return "search_moreOptions_moreOptionsLink" if name == "id" else None
+
+        async def evaluate(self, _script):
+            return {"label": "All versions" if state["selected"] else "Released version",
+                    "value": "allversions" if state["selected"] else "releasedversion"}
+
+        async def inner_text(self):
+            return "Search options: All versions" if state["applied"] else "Search options: Released version"
+
+        def locator(self, selector_text):
+            assert '_versionOptionNode' in selector_text
+            return Collection([row] if state["open"] else [])
+
+        def get_by_role(self, role, **_kwargs):
+            if self.name == "dialog" and role == "button":
+                return Collection([ok] if state["open"] else [])
+            if self.name == "row" and role == "listbox":
+                return Collection([selector])
+            raise AssertionError((self.name, role))
+
+    button, dialog, row, selector, option, ok = (Element(name) for name in ("button", "dialog", "row", "selector", "option", "ok"))
+
+    class Page:
+        def locator(self, selector_text):
+            assert 'search_moreOptions_moreOptionsDialog' in selector_text
+            return Collection(lambda: [dialog] if state["open"] else [])
+
+        def get_by_role(self, role, **_kwargs):
+            assert role == "option"
+            return Collection([option] if state["menu"] else [])
+
+    page = Page()
+    button.page = page
+    selector.page = page
+
+    class Panel:
+        def locator(self, selector_text):
+            assert 'moreOptionsLink' in selector_text
+            return Collection([button])
+
+    async def visible(collection):
+        return collection.items() if callable(collection.items) else collection.items
+
+    async def click(target, _timeout):
+        state["clicks"].append(target.name)
+        if target is button:
+            state["open"] = True
+        elif target is selector:
+            state["menu"] = True
+        elif target is option:
+            state["selected"] = True
+            state["menu"] = False
+        elif target is ok:
+            state["applied"] = apply_succeeds
+            state["open"] = False
+
+    monkeypatch.setattr(lookup, "_visible_locators", visible)
+    monkeypatch.setattr(lookup, "click_control", click)
+    if apply_succeeds:
+        asyncio.run(lookup._ensure_all_versions(Panel(), 100))
+    else:
+        with pytest.raises(LookupError, match="did not apply All versions"):
+            asyncio.run(lookup._ensure_all_versions(Panel(), 100))
+    assert state["applied"] is apply_succeeds
+    assert ("button" in state["clicks"]) is not already_open
+    assert ("option" in state["clicks"]) is not already_selected
+
+
+def test_lookup_recovers_when_authentication_appears_during_saved_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+    from control_panel_v3.workers.ecm_step0_export import AuthenticationRequired
+
+    events = []
+
+    async def auth_required(_page):
+        return False
+
+    async def open_search(_page, _timeout, **_kwargs):
+        events.append("open")
+        if events.count("open") == 1:
+            raise AuthenticationRequired("login appeared")
+        return "panel"
+
+    async def wait_for_auth(_page, _predicate, _timeout):
+        events.append("manual-auth")
+
+    monkeypatch.setattr(lookup, "_page_requires_authentication", auth_required)
+    monkeypatch.setattr(lookup, "_open_saved_search", open_search)
+    monkeypatch.setattr(lookup, "wait_for_manual_auth", wait_for_auth)
+    assert asyncio.run(lookup._open_lookup_with_auth(object(), 1)) == "panel"
+    assert events == ["open", "manual-auth", "open"]
+
+
+def test_lookup_late_authentication_timeout_does_not_retry_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+    from control_panel_v3.workers.ecm_step0_export import AuthenticationRequired
+
+    calls = []
+
+    async def auth_required(_page):
+        return False
+
+    async def open_search(_page, _timeout, **_kwargs):
+        calls.append("open")
+        raise AuthenticationRequired("login appeared")
+
+    async def wait_for_auth(_page, _predicate, _timeout):
+        raise RuntimeError("authentication timed out")
+
+    monkeypatch.setattr(lookup, "_page_requires_authentication", auth_required)
+    monkeypatch.setattr(lookup, "_open_saved_search", open_search)
+    monkeypatch.setattr(lookup, "wait_for_manual_auth", wait_for_auth)
+    with pytest.raises(RuntimeError, match="authentication timed out"):
+        asyncio.run(lookup._open_lookup_with_auth(object(), 1))
+    assert calls == ["open"]
+
+
+def test_lookup_detects_ecm_login_pane_when_text_probe_misses(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+
+    class Page:
+        def locator(self, selector):
+            assert selector == '.ecmLoginPane [type="password"]'
+            return object()
+
+    async def no_auth(_page):
+        return False
+
+    async def visible(_locator):
+        return [object()]
+
+    monkeypatch.setattr(lookup, "_page_requires_authentication", no_auth)
+    monkeypatch.setattr(lookup, "_visible_locators", visible)
+    assert asyncio.run(lookup._lookup_requires_authentication(Page())) is True
 
 
 def test_lookup_processes_rows_independently_and_leaves_misses_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -342,6 +869,7 @@ def test_lookup_processes_rows_independently_and_leaves_misses_unchanged(tmp_pat
     for row_number, values in enumerate(((1016, "Method Statement", date(2026, 8, 1), "MS-42", "A", "Operator", 1, "SMM42", "", None, None), (1016, "Method Statement", date(2026, 8, 2), "MS-43", "A", "Operator", 1, "SMM43", "", None, None)), start=2):
         for column, value in enumerate(values, start=1):
             sheet.cell(row_number, column).value = value
+        sheet.cell(row_number, OUTGOING_REFERENCE_COLUMN).value = "REF/HIT" if row_number == 2 else "REF/MISS"
     sheet.cell(3, REMARK_COLUMN).value = "reviewed manually"
     workbook.save(workbook_path)
     workbook.close()
@@ -469,6 +997,9 @@ def test_lookup_processes_rows_independently_and_leaves_misses_unchanged(tmp_pat
     async def fake_open_saved_search(page, timeout, **kwargs):
         return page.panel
 
+    async def no_op(*_args, **_kwargs):
+        return None
+
     async def fake_active_form(panel):
         return panel
 
@@ -483,10 +1014,19 @@ def test_lookup_processes_rows_independently_and_leaves_misses_unchanged(tmp_pat
             return None
 
     monkeypatch.setattr(lookup, "_open_saved_search", fake_open_saved_search)
+    async def no_authentication(_page):
+        return False
+
+    monkeypatch.setattr(lookup, "_lookup_requires_authentication", no_authentication)
+    monkeypatch.setattr(lookup, "_ensure_all_versions", no_op)
+    async def fresh_snapshot(*_args):
+        return {"busy": False, "text": "before", "rows": [], "emptyText": ""}
+
+    monkeypatch.setattr(lookup, "_lookup_results_snapshot", fresh_snapshot)
     monkeypatch.setattr(lookup, "_active_form", fake_active_form)
     monkeypatch.setattr(lookup, "_set_search_criteria", fake_set_criteria)
     monkeypatch.setattr(lookup, "_visible_locators", fake_visible)
-    async def fake_read(panel, page, timeout):
+    async def fake_read(panel, page, timeout, **_kwargs):
         if fail_result_read[0]:
             raise TimeoutError("search results did not load")
         if current_reference[0] == "REF/MISS":
@@ -634,21 +1174,221 @@ def test_browser_support_waits_for_manual_authentication(monkeypatch: pytest.Mon
 
     from control_panel_v3.workers.browser_support import wait_for_manual_auth
 
-    authenticated = [False]
-    ready_calls = []
+    authentication_required = [True]
+    focus_events: list[str] = []
+
+    class Field:
+        async def is_visible(self):
+            return True
+
+        async def is_enabled(self):
+            return True
+
+        async def click(self, **_kwargs):
+            focus_events.append("username")
+
+    class Fields:
+        async def count(self):
+            return 1
+
+        def nth(self, _index):
+            return Field()
+
+    class Page:
+        frames = []
+
+        async def bring_to_front(self):
+            focus_events.append("front")
+
+        def locator(self, _selector):
+            return Fields()
 
     async def fake_sleep(_value):
-        authenticated[0] = True
+        if focus_events.count("poll") == 0:
+            focus_events.append("poll")
+        else:
+            authentication_required[0] = False
 
-    async def is_authenticated(_page):
-        return authenticated[0]
-
-    async def ready(_page, timeout):
-        ready_calls.append(timeout)
+    async def requires_authentication(_page):
+        return authentication_required[0]
 
     monkeypatch.setattr("control_panel_v3.workers.browser_support.asyncio.sleep", fake_sleep)
-    asyncio.run(wait_for_manual_auth(object(), is_authenticated, ready, 1))
-    assert ready_calls == [2_000]
+    asyncio.run(wait_for_manual_auth(Page(), requires_authentication, 1))
+    assert not authentication_required[0]
+    assert focus_events.count("front") == 1
+    assert focus_events.count("username") == 1
+
+
+def test_browser_support_login_focus_is_best_effort_without_username_field() -> None:
+    import asyncio
+
+    from control_panel_v3.workers.browser_support import focus_login_username
+
+    class Page:
+        frames = []
+
+        async def bring_to_front(self):
+            return None
+
+        def locator(self, _selector):
+            raise RuntimeError("No login form")
+
+    asyncio.run(focus_login_username(Page()))
+
+
+def test_browser_support_authentication_timeout_and_closed_page() -> None:
+    import asyncio
+
+    from control_panel_v3.workers.browser_support import wait_for_manual_auth
+
+    async def requires_authentication(_page):
+        return True
+
+    class ClosedPage:
+        def is_closed(self):
+            return True
+
+    with pytest.raises(RuntimeError, match="authentication timed out"):
+        asyncio.run(wait_for_manual_auth(object(), requires_authentication, 0.01))
+    with pytest.raises(RuntimeError, match="closed during authentication"):
+        asyncio.run(wait_for_manual_auth(ClosedPage(), requires_authentication, 1))
+
+
+@pytest.mark.parametrize("scenario", ["signed-in", "existing-session", "auth-timeout", "search-failure"])
+def test_lookup_authentication_handoff_and_failure_diagnostics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str) -> None:
+    import asyncio
+    import types
+
+    import control_panel_v3.workers.ecm_outgoing_reference_lookup as lookup
+
+    # Make the worker's V3-only path boundary point to this isolated fixture.
+    monkeypatch.setattr(lookup, "__file__", str(tmp_path / "workers" / "lookup.py"))
+    csv_path = tmp_path / "properties.csv"
+    workbook_path = tmp_path / "review.xlsx"
+    _write_csv(csv_path)
+    sheet_name = _write_workbook(workbook_path)
+    original = workbook_path.read_bytes()
+    events = []
+
+    class Page:
+        async def goto(self, *_args, **_kwargs):
+            events.append("goto")
+
+        def is_closed(self):
+            return False
+
+    page = Page()
+
+    class Context:
+        pages = [page]
+
+        async def close(self):
+            events.append("close")
+
+    class Chromium:
+        async def launch_persistent_context(self, **kwargs):
+            assert kwargs["headless"] is False
+            assert kwargs["user_data_dir"] == str(tmp_path / "profile")
+            return Context()
+
+    class Playwright:
+        chromium = Chromium()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    monkeypatch.setitem(sys.modules, "playwright.async_api", types.SimpleNamespace(async_playwright=Playwright))
+    auth_checks = [0]
+    auth_state = [True]
+
+    async def requires_authentication(current_page):
+        assert current_page is page
+        auth_checks[0] += 1
+        if scenario == "existing-session":
+            auth_state[0] = False
+        elif scenario == "signed-in":
+            auth_state[0] = auth_checks[0] <= 2
+        else:
+            auth_state[0] = True if scenario == "auth-timeout" else auth_checks[0] == 1
+        return auth_state[0]
+
+    async def open_saved_search(current_page, _timeout, **_kwargs):
+        assert current_page is page
+        assert not auth_state[0], "Search must not open while authentication is required"
+        events.append("open-search")
+        if scenario == "search-failure":
+            raise RuntimeError("search unavailable")
+        return object()
+
+    async def diagnostics(current_page, _directory, _stage, _diagnostics):
+        assert current_page is page
+        assert "close" not in events
+        events.append("diagnostics")
+
+    async def return_object(*_args, **_kwargs):
+        return object()
+
+    async def return_buttons(*_args, **_kwargs):
+        return [object()]
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    async def first_date(*_args, **_kwargs):
+        return date(2026, 8, 1)
+
+    monkeypatch.setattr(lookup, "_page_requires_authentication", requires_authentication)
+    monkeypatch.setattr(lookup, "save_failure_diagnostics", diagnostics)
+    monkeypatch.setattr(lookup, "_active_form", return_object)
+    monkeypatch.setattr(lookup, "_set_search_criteria", no_op)
+    monkeypatch.setattr(lookup, "_visible_locators", return_buttons)
+    monkeypatch.setattr(lookup, "click_control", no_op)
+    monkeypatch.setattr(lookup, "_read_oldest_result_date", first_date)
+
+    # The fake panel must expose the Search button lookup used by the worker.
+    class Panel:
+        def get_by_role(self, *_args, **_kwargs):
+            return object()
+
+    panel = Panel()
+
+    async def open_panel(current_page, timeout, **kwargs):
+        await open_saved_search(current_page, timeout, **kwargs)
+        return panel
+
+    monkeypatch.setattr(lookup, "_open_saved_search", open_panel)
+    monkeypatch.setattr(lookup, "_ensure_all_versions", no_op)
+    async def fresh_snapshot(*_args):
+        return {"busy": False, "text": "before", "rows": [], "emptyText": ""}
+
+    monkeypatch.setattr(lookup, "_lookup_results_snapshot", fresh_snapshot)
+    params = dict(workbook_path=workbook_path, worksheet_name=sheet_name, csv_path=csv_path,
+                  profile_dir=tmp_path / "profile", ecm_url="https://example.test/", timeout_seconds=0.01,
+                  summary_path=tmp_path / "summary.json", diagnostics_dir=tmp_path / "diagnostics")
+    if scenario in {"signed-in", "existing-session"}:
+        if scenario == "signed-in":
+            async def no_delay(_seconds):
+                return None
+            monkeypatch.setattr("control_panel_v3.workers.browser_support.asyncio.sleep", no_delay)
+        assert asyncio.run(lookup.run_lookup(**params)) == (1, 0, 1)
+        updated = load_workbook(workbook_path, read_only=True)
+        try:
+            assert updated[sheet_name].cell(2, REMARK_COLUMN).value == "2026-08-01"
+        finally:
+            updated.close()
+        assert "diagnostics" not in events
+    else:
+        message = "authentication timed out" if scenario == "auth-timeout" else "saved search"
+        with pytest.raises(RuntimeError, match=message):
+            asyncio.run(lookup.run_lookup(**params))
+        assert workbook_path.read_bytes() == original
+        assert not params["summary_path"].exists()
+        assert events.index("diagnostics") < events.index("close")
+        if scenario == "auth-timeout":
+            assert "open-search" not in events
 
 
 def test_app_routes_show_only_supported_live_worker_controls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -724,6 +1464,11 @@ def test_report_workflow_routes_enforce_preview_handoff_and_audit_metadata(tmp_p
         history.mark_finished(step0.id, state="succeeded", exit_code=0)
         accepted = client.post(f"/report-periods/{period.id}/runs/next", data={"source_run_id": step0.id}, follow_redirects=False)
         assert accepted.status_code == 303
+        step1a_run = history.list_runs(workflow_id="ecm-step-1a", period_id=period.id)[0]
+        assert accepted.headers["location"] == f"/runs/{step1a_run.id}"
+        detail = client.get(accepted.headers["location"])
+        assert detail.status_code == 200
+        assert f"RUN #{step1a_run.id}" in detail.text
         assert submitted[-1]["workflow_id"] == "ecm-step-1a"
 
         stale_period = history.create_report_period("2026-07-25", "2026-07-31")
@@ -743,6 +1488,7 @@ def test_report_workflow_routes_enforce_preview_handoff_and_audit_metadata(tmp_p
             data={"lookup_scope": "blank"}, follow_redirects=False,
         )
         assert lookup_response.status_code == 303
+        assert lookup_response.headers["location"] == "/report-history"
         lookup_run = history.list_runs(workflow_id="ecm-first-date-lookup", period_id=lookup_period.id)[0]
         assert lookup_run.lookup_scope == "blank"
 
@@ -752,6 +1498,7 @@ def test_report_workflow_routes_enforce_preview_handoff_and_audit_metadata(tmp_p
             data={"confirm_step_1b_bypass": "true"}, follow_redirects=False,
         )
         assert bypass_response.status_code == 303
+        assert bypass_response.headers["location"] == "/report-history"
         bypass_run = history.list_runs(workflow_id="ecm-step-2", period_id=bypass_period.id)[0]
         assert bypass_run.manual_step_1b_bypass is True
         assert "Manual Step 1b bypass confirmed" in client.get("/history").text
@@ -759,3 +1506,80 @@ def test_report_workflow_routes_enforce_preview_handoff_and_audit_metadata(tmp_p
         client.close()
         import shutil
         shutil.rmtree(test_root, ignore_errors=True)
+
+
+@pytest.mark.parametrize("recent_has_search", [True, False])
+def test_lookup_open_search_waits_for_panel_and_avoids_cross_group_ambiguity(monkeypatch: pytest.MonkeyPatch, recent_has_search: bool) -> None:
+    import asyncio
+    from control_panel_v3.workers import ecm_step0_export as step0
+
+    class Locator:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.first = self
+
+        async def wait_for(self, **_kwargs) -> None:
+            assert opened[0]
+
+    class Page:
+        def get_by_role(self, _role: str, name: str, **_kwargs) -> Locator:
+            return Locator(name)
+
+    opened = [False]
+    polls = [0]
+    events: list[str] = []
+
+    async def wait_for_search_panel(_page, _timeout_ms: int) -> object:
+        events.append("wait_for_search_panel")
+        return object()
+
+    async def visible(locator):
+        if locator.name == "Search ECM Document":
+            return [locator] if opened[0] else []
+        if locator.name in {"Recent Searches", "All Searches"}:
+            polls[0] += 1
+            # Simulate delayed Dojo tree rendering after authentication clears.
+            if polls[0] < 3:
+                return []
+            return [locator]
+        return []
+
+    async def expand(locator, _timeout_ms: int) -> None:
+        events.append(f"expand:{locator.name}")
+
+    async def saved(_page, group: str, search_name: str):
+        assert search_name == "Search ECM Document"
+        # Present in All Searches always, and also in Recent Searches when recent_has_search=True.
+        if group == "All Searches" or recent_has_search:
+            return [Locator(f"{group}:{search_name}")]
+        return []
+
+    async def click(locator, _timeout_ms: int) -> None:
+        events.append(f"click:{locator.name}")
+        opened[0] = True
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    async def active_form(panel):
+        return panel
+
+    monkeypatch.setattr(step0, "_wait_for_search_panel", wait_for_search_panel)
+    monkeypatch.setattr(step0, "_visible_locators", visible)
+    monkeypatch.setattr(step0, "_expand_treeitem", expand)
+    monkeypatch.setattr(step0, "_saved_searches_in_group", saved)
+    monkeypatch.setattr(step0, "click_control", click)
+    monkeypatch.setattr(step0, "_active_form", active_form)
+    monkeypatch.setattr(step0.asyncio, "sleep", no_delay)
+
+    panel = asyncio.run(step0._open_lookup_search(Page(), 5000, search_name="Search ECM Document"))
+    assert panel.name == "Search ECM Document"
+    expected_prefix = ["wait_for_search_panel", "expand:Recent Searches", "click:Recent Searches:Search ECM Document"]
+    if not recent_has_search:
+        expected_prefix = [
+            "wait_for_search_panel",
+            "expand:Recent Searches",
+            "expand:All Searches",
+            "click:All Searches:Search ECM Document",
+        ]
+    assert events == expected_prefix

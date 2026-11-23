@@ -4,10 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Workflow Control Panel V3{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='site.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='site.css') }}?v=7">
 </head>
 <body>
-  <header class="topbar"><a href="/" class="brand">Method Statement <span>V3</span></a><nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/report-history">Report History</a><a href="/history">V3 Run History</a><a href="/archive">V2 Archive</a></nav><form action="/mode/toggle" method="post" class="inline mode-form"><input type="hidden" name="return_to" value="{{ request.url.path }}"><button class="mode" type="submit">{% if preview_only %}PREVIEW · switch to live{% else %}LIVE · switch to preview{% endif %}</button></form></header>
+  <header class="topbar"><div class="shell header-content"><a href="/" class="brand">Method Statement <span>V3</span></a><form action="/mode/toggle" method="post" class="inline mode-form"><input type="hidden" name="return_to" value="{{ request.url.path }}"><button class="mode" type="submit" aria-pressed="{{ 'false' if preview_only else 'true' }}" aria-label="{% if preview_only %}Switch to live execution mode{% else %}Switch to preview-only mode{% endif %}" title="{% if preview_only %}Switch to live execution mode{% else %}Switch to preview-only mode{% endif %}">{% if preview_only %}PREVIEW · READ ONLY{% else %}LIVE · EXECUTION ENABLED{% endif %}</button></form><nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/manual-run">Manual Run</a><a href="/report-history">Report History</a><a href="/history">V3 Run History</a><a href="/archive">V2 Archive</a></nav></div></header>
   <main class="shell">{% block content %}{% endblock %}</main>
+  <script src="{{ url_for('static', path='app.js') }}?v=3" defer></script>
 </body>
 </html>

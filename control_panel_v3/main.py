@@ -203,7 +203,7 @@ def create_app() -> FastAPI:
             workflow_configuration_errors = settings.validate_for_workflow(workflow_id)
             if workflow_configuration_errors:
                 raise ValueError("Resolve workflow configuration errors before starting: " + " ".join(workflow_configuration_errors))
-            runner.submit(
+            run = runner.submit(
                 workflow_id,
                 WORKFLOWS[workflow_id].label,
                 date.fromisoformat(period.start_date),
@@ -221,6 +221,8 @@ def create_app() -> FastAPI:
                     previous_lookup_summary=prior_lookup_summary,
                 ),
             )
+            if workflow_id == "ecm-step-1a":
+                return RedirectResponse(f"/runs/{run.id}", status_code=303)
             return RedirectResponse("/report-history", status_code=303)
         except (KeyError, ValueError, PreflightError, WorkflowBusyError) as error:
             return RedirectResponse("/report-history?" + urlencode({"error": str(error)}), status_code=303)

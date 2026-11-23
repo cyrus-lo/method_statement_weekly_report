@@ -1,11 +1,32 @@
 {% extends "base.html" %}
 {% block title %}V3 Dashboard · Workflow Control Panel{% endblock %}
 {% block content %}
-<section class="hero"><p class="eyebrow">ISOLATED WORKFLOW OPERATIONS</p><h1>V3 period dashboard</h1><p>V3 uses separate working files, history, profiles, and worker processes. Preview mode does not execute workflows.</p></section>
-{% if error %}<section class="alert">{{ error }}</section>{% endif %}
-{% if configuration_errors %}<section class="alert"><strong>Configuration needs attention</strong><ul>{% for item in configuration_errors %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
-{% for item in periods %}{% if item.attention %}<section class="attention"><strong>Period #{{ item.period.id }} · {{ item.period.start_date }} — {{ item.period.end_date }}</strong><span>{{ item.attention }}</span></section>{% endif %}{% endfor %}
-<section class="period-grid" aria-label="Reporting periods">
-{% for item in periods %}<article class="card"><header><div><p class="eyebrow">PERIOD #{{ item.period.id }}</p><h2>{{ item.period.start_date }} — {{ item.period.end_date }}</h2><small>Last activity: {{ item.summary.last_updated_at | hkt }}</small></div><span class="badge">{{ item.ecm_status }}</span></header><p>{{ item.next_action }}</p><div class="flow"><h3>ECM workflow</h3><ol>{% for key,label in [('ecm-step-0','Step 0 · Export'),('ecm-step-1a','Step 1a · Review workbook'),('ecm-first-date-lookup','First-date lookup'),('ecm-step-1b','Step 1b · Finalize'),('manual-decisions','Manual Use SMM / Use KMS'),('ecm-step-2','Step 2 · SMM summary')] %}<li>{{ label }}{% set run=item.runs.get(key) %}{% if run %}<span>{{ run.state }} · <a href="/runs/{{ run.id }}">Run #{{ run.id }}</a></span>{% else %}<span>Not started / manual checkpoint</span>{% endif %}</li>{% endfor %}</ol></div><p><strong>Weekly report:</strong> {{ item.weekly_status }}{% set weekly=item.runs.get('weekly-report') %}{% if weekly %} · <a href="/runs/{{ weekly.id }}">View run</a>{% endif %}</p><a class="button" href="/report-history">Open period controls</a></article>{% else %}<article class="card"><h2>No V3 periods yet</h2><p>Create a reporting period to begin.</p></article>{% endfor %}
+<section class="hero dashboard-hero">
+	<div><p class="eyebrow">PERIOD-FIRST OPERATIONS</p><h1>Workflow status by reporting period.</h1><p>V3 keeps its workbooks, history, browser profile, and worker processes separate from V1/V2. The ECM workflow includes an independent first-date lookup before Step 1b.</p></div>
+	<div class="preview-state">{% if preview_only %}V3 Preview<br><strong>No workflows are dispatched</strong>{% else %}V3 Live<br><strong>Period workflows are gated</strong>{% endif %}</div>
+</section>
+{% if error %}<section class="alert" role="alert">{{ error }}</section>{% endif %}
+{% if configuration_errors %}<section class="alert" role="alert"><strong>V3 configuration needs attention.</strong><ul>{% for item in configuration_errors %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
+{% for item in periods %}{% if item.attention %}<section class="attention" role="status"><strong>Attention · Period #{{ item.period.id }} ({{ item.period.start_date }} — {{ item.period.end_date }})</strong><span>{{ item.attention }}</span></section>{% endif %}{% endfor %}
+
+<section class="period-list" aria-label="Reporting period operational overview">
+{% for item in periods %}
+	<article class="period-panel">
+		<header class="period-heading"><div><p class="eyebrow">PERIOD #{{ item.period.id }}</p><h2>{{ item.period.start_date }} — {{ item.period.end_date }}</h2><p>Last activity: {{ item.summary.last_updated_at | hkt }}</p></div><span class="status status-{{ item.ecm_status|lower|replace(' ', '-')|replace('—', '-') }}">ECM · {{ item.ecm_status }}</span></header>
+		<div class="period-columns">
+			<section class="workflow-summary"><h3>Weekly Method Statement Report</h3><p class="status-line"><strong>Status:</strong> {{ item.weekly_status }}</p>{% set weekly = item.runs.get('weekly-report') %}{% if weekly %}<a href="/runs/{{ weekly.id }}">View Run #{{ weekly.id }}</a>{% endif %}<p>This report runs independently from the ECM workflow.</p></section>
+			<section class="workflow-summary"><h3>ECM Workflow</h3><p class="status-line"><strong>Status:</strong> {{ item.ecm_status }}</p><p>{{ item.next_action }}</p></section>
+		</div>
+		<ol class="stepper" aria-label="ECM workflow steps">
+			{% for workflow_id, label in [('ecm-step-0', 'Step 0 — Export Properties'), ('ecm-step-1a', 'Step 1a — Create Review'), ('ecm-first-date-lookup', 'First-Date Lookup'), ('ecm-step-1b', 'Step 1b — Finalize Review'), ('manual-decisions', 'Manual Use SMM / Use KMS'), ('ecm-step-2', 'Step 2 — Create SMM Summary')] %}
+			{% set run = item.runs.get(workflow_id) %}
+			<li><strong>{{ label }}</strong>{% if run %}<span>{{ run.state }} · <a href="/runs/{{ run.id }}">Run #{{ run.id }}</a></span>{% elif workflow_id == 'manual-decisions' %}<span>Manual checkpoint</span>{% else %}<span>Not started</span>{% endif %}</li>
+			{% endfor %}
+		</ol>
+		<div class="period-actions"><a class="button" href="/report-history">Open period workflow controls</a></div>
+	</article>
+{% else %}
+	<section class="empty-state"><h2>No V3 reporting periods yet</h2><p>Create a reporting period to begin.</p><a class="button" href="/report-history">Open Report History</a></section>
+{% endfor %}
 </section>
 {% endblock %}

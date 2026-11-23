@@ -163,14 +163,47 @@ async def save_failure_diagnostics(page, directory: Path, stage: str, diagnostic
     return paths
 
 
-async def wait_for_manual_auth(page, is_authenticated, ready, timeout_seconds: int) -> None:
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while asyncio.get_running_loop().time() < deadline:
-        if await is_authenticated(page):
+async def focus_login_username(page) -> None:
+    """Bring a manual login page forward and focus a visible username field once."""
+    try:
+        await page.bring_to_front()
+    except Exception:
+        pass
+
+    selectors = (
+        'input[name="loginfmt"]',
+        'input[name="username"]',
+        'input[type="email"]',
+        'input[autocomplete="username"]',
+        'input[type="text"]',
+    )
+    frames = getattr(page, "frames", None) or [page]
+    for selector in selectors:
+        for frame in frames:
             try:
-                await ready(page, 2_000)
-                return
+                fields = frame.locator(selector)
+                for index in range(await fields.count()):
+                    field = fields.nth(index)
+                    if not await field.is_visible() or not await field.is_enabled():
+                        continue
+                    await field.click(timeout=2_000)
+                    return
             except Exception:
-                pass
-        await asyncio.sleep(1)
-    raise RuntimeError("Manual ECM SSO/MFA authentication timed out; complete login in the dedicated V3 Edge window and retry.")
+                continue
+
+
+async def wait_for_manual_auth(page, requires_authentication, timeout_seconds: float) -> None:
+    """Wait for the login screen to clear; search readiness is checked separately."""
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    focused_login = False
+    while asyncio.get_running_loop().time() < deadline:
+        if callable(getattr(page, "is_closed", None)) and page.is_closed():
+            raise RuntimeError("The ECM browser page was closed during authentication.")
+        authentication_required = await requires_authentication(page)
+        if not authentication_required:
+            return
+        if not focused_login:
+            await focus_login_username(page)
+            focused_login = True
+        await asyncio.sleep(min(1, max(0, deadline - asyncio.get_running_loop().time())))
+    raise RuntimeError(f"Manual ECM SSO/MFA authentication timed out after {timeout_seconds} seconds; complete login in the dedicated V3 Edge window and retry.")

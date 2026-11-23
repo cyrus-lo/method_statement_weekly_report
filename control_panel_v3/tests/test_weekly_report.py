@@ -9,20 +9,26 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook, load_workbook
 
-from control_panel_v3.services.config import CONTROL_PANEL_ROOT, load_settings
+from control_panel_v3.services import config
+from control_panel_v3.services.config import (
+    CONTROL_PANEL_ROOT,
+    ConfigurationError,
+    load_settings,
+    load_weekly_report_environment,
+)
 from control_panel_v3.services.workflow_builders import PreflightError, prepare_workflow
 from control_panel_v3.services.workflows import REPORT_WORKFLOW_IDS, ecm_workflow_gate_error
 from control_panel_v3.workers.weekly_report import WeeklyReportError, generate_weekly_report
 
 
 REPORTING_ENV = {
-    "CONTROL_PANEL_V3_WEEKLY_PGHOST": "v3-db.example.test",
-    "CONTROL_PANEL_V3_WEEKLY_PGDATABASE": "weekly_test",
-    "CONTROL_PANEL_V3_WEEKLY_PGUSER": "read_only_test",
-    "CONTROL_PANEL_V3_WEEKLY_PGPASSWORD": "test-password-not-a-real-secret",
-    "CONTROL_PANEL_V3_WEEKLY_PGPORT": "5433",
-    "CONTROL_PANEL_V3_WEEKLY_PGSSLMODE": "require",
-    "CONTROL_PANEL_V3_WEEKLY_REPORTING_TIMEZONE": "Asia/Hong_Kong",
+    "PGHOST": "django-db.example.test",
+    "PGDATABASE": "weekly_test",
+    "PGUSER": "read_only_test",
+    "PGPASSWORD": "test-password-not-a-real-secret",
+    "PGPORT": "5433",
+    "PGSSLMODE": "require",
+    "REPORTING_TIMEZONE": "Asia/Hong_Kong",
 }
 
 
@@ -54,9 +60,15 @@ def _make_template(path: Path) -> None:
     workbook.close()
 
 
-def _install_v3_database_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key, value in REPORTING_ENV.items():
-        monkeypatch.setenv(key, value)
+def _write_weekly_env(path: Path, values: dict[str, str] | None = None) -> Path:
+    settings = values or REPORTING_ENV
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{key}={value}\n" for key, value in settings.items()), encoding="utf-8")
+    return path
+
+
+def _use_weekly_env(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
+    monkeypatch.setattr(config, "DJANGO_ENV_PATH", path)
 
 
 @pytest.fixture
@@ -108,10 +120,63 @@ def test_weekly_report_is_independent_of_ecm_gates(tmp_path: Path) -> None:
     assert run.workflow_id == "weekly-report"
 
 
+def test_weekly_env_parser_uses_file_values_without_mutating_process_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = _write_weekly_env(tmp_path / "django.env")
+    for key in REPORTING_ENV:
+        monkeypatch.setenv(key, "ambient-must-not-win")
+    before = {key: os.environ.get(key) for key in REPORTING_ENV}
+    result = load_weekly_report_environment(env_file)
+    assert result == REPORTING_ENV
+    assert {key: os.environ.get(key) for key in REPORTING_ENV} == before
+
+
+@pytest.mark.parametrize("missing_key", ("PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"))
+def test_weekly_env_parser_rejects_missing_or_blank_required_settings(
+    tmp_path: Path, missing_key: str
+) -> None:
+    values = dict(REPORTING_ENV)
+    values[missing_key] = "   "
+    with pytest.raises(ConfigurationError, match=missing_key):
+        load_weekly_report_environment(_write_weekly_env(tmp_path / "django.env", values))
+
+
+@pytest.mark.parametrize("port", ("0", "65536", "not-a-port"))
+def test_weekly_env_parser_rejects_invalid_port(tmp_path: Path, port: str) -> None:
+    values = dict(REPORTING_ENV, PGPORT=port)
+    with pytest.raises(ConfigurationError, match="PGPORT"):
+        load_weekly_report_environment(_write_weekly_env(tmp_path / "django.env", values))
+
+
+def test_weekly_env_parser_applies_optional_defaults_and_validates_timezone(tmp_path: Path) -> None:
+    values = dict(REPORTING_ENV)
+    values.pop("PGPORT")
+    values.pop("PGSSLMODE")
+    values.pop("REPORTING_TIMEZONE")
+    parsed = load_weekly_report_environment(_write_weekly_env(tmp_path / "defaults.env", values))
+    assert parsed["PGPORT"] == "5432"
+    assert "PGSSLMODE" not in parsed
+    assert parsed["REPORTING_TIMEZONE"] == "Asia/Hong_Kong"
+
+    values["REPORTING_TIMEZONE"] = "   "
+    with pytest.raises(ConfigurationError, match="REPORTING_TIMEZONE"):
+        load_weekly_report_environment(_write_weekly_env(tmp_path / "blank-timezone.env", values))
+
+    values["REPORTING_TIMEZONE"] = "not/a-zone"
+    with pytest.raises(ConfigurationError, match="REPORTING_TIMEZONE"):
+        load_weekly_report_environment(_write_weekly_env(tmp_path / "invalid-timezone.env", values))
+
+
 def test_weekly_builder_uses_v3_template_run_directory_and_secret_free_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v3_test_dirs
 ) -> None:
-    _install_v3_database_settings(monkeypatch)
+    env_file = _write_weekly_env(tmp_path / "django.env")
+    _use_weekly_env(monkeypatch, env_file)
+    for key in REPORTING_ENV:
+        monkeypatch.setenv(key, "ambient-must-not-win")
+    for key in REPORTING_ENV:
+        monkeypatch.setenv(f"CONTROL_PANEL_V3_WEEKLY_{key}", "obsolete-must-not-win")
     settings = load_settings()
     root = v3_test_dirs(CONTROL_PANEL_ROOT / "tests" / "weekly-builder-fixture")
     template = root / "templates" / "weekly.xlsx"
@@ -132,18 +197,23 @@ def test_weekly_builder_uses_v3_template_run_directory_and_secret_free_command(
     assert "control_panel_v3.workers.weekly_report" in command
     assert str(template) in command
     assert "weekly-run-902" in command
-    assert REPORTING_ENV["CONTROL_PANEL_V3_WEEKLY_PGPASSWORD"] not in command
+    assert REPORTING_ENV["PGPASSWORD"] not in command
     assert prepared.artifacts[0].path.is_relative_to(root / "django" / "weekly-run-902")
     assert prepared.environment_overrides is not None
-    assert prepared.environment_overrides["PGPASSWORD"] == ""
-    assert prepared.environment_overrides["CONTROL_PANEL_V3_WEEKLY_PGPASSWORD"] == REPORTING_ENV["CONTROL_PANEL_V3_WEEKLY_PGPASSWORD"]
+    assert prepared.environment_overrides["PGPASSWORD"] == REPORTING_ENV["PGPASSWORD"]
+    assert prepared.environment_overrides["PGHOST"] == REPORTING_ENV["PGHOST"]
+    assert prepared.environment_overrides["PGPORT"] == "5433"
+    assert prepared.environment_overrides["REPORTING_TIMEZONE"] == REPORTING_ENV["REPORTING_TIMEZONE"]
+    assert "CONTROL_PANEL_V3_WEEKLY_PGPASSWORD" not in prepared.environment_overrides
+    assert set(prepared.environment_overrides) == {
+        "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", *REPORTING_ENV
+    }
 
 
-def test_weekly_builder_requires_v3_credentials_only_for_weekly(
+def test_weekly_builder_requires_django_env_only_for_weekly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, v3_test_dirs
 ) -> None:
-    for name in REPORTING_ENV:
-        monkeypatch.delenv(name, raising=False)
+    _use_weekly_env(monkeypatch, tmp_path / "missing.env")
     settings = load_settings()
     fixture_root = v3_test_dirs(CONTROL_PANEL_ROOT / "tests" / "weekly-missing-config")
     weekly_template = fixture_root / "weekly.xlsx"
@@ -153,13 +223,14 @@ def test_weekly_builder_requires_v3_credentials_only_for_weekly(
         "weekly_template_path": weekly_template,
         "django_output_dir": CONTROL_PANEL_ROOT / "tests" / "weekly-missing-config" / "out",
     })
-    with pytest.raises(PreflightError, match="V3 weekly database settings"):
+    with pytest.raises(PreflightError, match="django/.env setting") as error:
         prepare_workflow("weekly-report", date(2026, 7, 1), date(2026, 7, 12), 903, test_settings)
+    assert REPORTING_ENV["PGPASSWORD"] not in str(error.value)
     assert settings.validate() == []
 
 
-def test_weekly_worker_creates_atomic_report_and_never_uses_ambient_database_settings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v3_test_dirs
+def test_weekly_worker_creates_atomic_report_from_isolated_child_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v3_test_dirs, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from control_panel_v3.workers.weekly_report import _load_reference_report
 
@@ -168,12 +239,8 @@ def test_weekly_worker_creates_atomic_report_and_never_uses_ambient_database_set
     _make_template(template)
     template_hash = _sha256(template)
     output_dir = v3_test_dirs(CONTROL_PANEL_ROOT / "tests" / "weekly-worker-output")
-    _install_v3_database_settings(monkeypatch)
-    monkeypatch.setenv("PGHOST", "ambient-host-must-not-win")
-    monkeypatch.setenv("PGDATABASE", "ambient-database-must-not-win")
-    monkeypatch.setenv("PGUSER", "ambient-user-must-not-win")
-    monkeypatch.setenv("PGPASSWORD", "ambient-password-must-not-win")
-    monkeypatch.setenv("REPORTING_TIMEZONE", "UTC")
+    for key, value in REPORTING_ENV.items():
+        monkeypatch.setenv(key, value)
     calls: list[tuple[Path, tuple[date, date], str | None, str | None, str | None, str | None, str | None]] = []
     report = _load_reference_report()
 
@@ -200,12 +267,14 @@ def test_weekly_worker_creates_atomic_report_and_never_uses_ambient_database_set
     assert len(calls) == 2
     assert all(call[1] == (date(2026, 7, 1), date(2026, 7, 12)) for call in calls)
     assert all(call[2:] == (
-        REPORTING_ENV["CONTROL_PANEL_V3_WEEKLY_PGHOST"],
-        REPORTING_ENV["CONTROL_PANEL_V3_WEEKLY_PGDATABASE"],
-        REPORTING_ENV["CONTROL_PANEL_V3_WEEKLY_PGUSER"],
-        REPORTING_ENV["CONTROL_PANEL_V3_WEEKLY_PGPASSWORD"],
-        "Asia/Hong_Kong",
+        REPORTING_ENV["PGHOST"],
+        REPORTING_ENV["PGDATABASE"],
+        REPORTING_ENV["PGUSER"],
+        REPORTING_ENV["PGPASSWORD"],
+        REPORTING_ENV["REPORTING_TIMEZONE"],
     ) for call in calls)
+    assert {key: os.getenv(key) for key in REPORTING_ENV} == REPORTING_ENV
+    assert REPORTING_ENV["PGPASSWORD"] not in capsys.readouterr().out
     assert _sha256(template) == template_hash
 
     workbook = load_workbook(output, data_only=False)
@@ -236,23 +305,24 @@ def test_weekly_worker_creates_atomic_report_and_never_uses_ambient_database_set
         )
 
 
-def test_weekly_worker_rejects_missing_v3_credentials_even_if_generic_values_exist(
+def test_weekly_worker_rejects_missing_generic_credentials_even_if_obsolete_values_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, v3_test_dirs
 ) -> None:
     from control_panel_v3.workers.weekly_report import _load_reference_report
 
-    for name in REPORTING_ENV:
+    for name in (*REPORTING_ENV, "CONTROL_PANEL_V3_WEEKLY_PGHOST", "CONTROL_PANEL_V3_WEEKLY_PGDATABASE",
+                 "CONTROL_PANEL_V3_WEEKLY_PGUSER", "CONTROL_PANEL_V3_WEEKLY_PGPASSWORD"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("PGHOST", "ambient-host")
-    monkeypatch.setenv("PGDATABASE", "ambient-database")
-    monkeypatch.setenv("PGUSER", "ambient-user")
-    monkeypatch.setenv("PGPASSWORD", "ambient-password")
+    monkeypatch.setenv("CONTROL_PANEL_V3_WEEKLY_PGHOST", "obsolete-host")
+    monkeypatch.setenv("CONTROL_PANEL_V3_WEEKLY_PGDATABASE", "obsolete-database")
+    monkeypatch.setenv("CONTROL_PANEL_V3_WEEKLY_PGUSER", "obsolete-user")
+    monkeypatch.setenv("CONTROL_PANEL_V3_WEEKLY_PGPASSWORD", "obsolete-password")
     template_dir = v3_test_dirs(CONTROL_PANEL_ROOT / "tests" / "weekly-missing-credentials-template")
     template = template_dir / "template.xlsx"
     _make_template(template)
     output_dir = v3_test_dirs(CONTROL_PANEL_ROOT / "tests" / "weekly-missing-credentials-output")
     report = _load_reference_report()
-    with pytest.raises(WeeklyReportError, match="CONTROL_PANEL_V3_WEEKLY_PGHOST"):
+    with pytest.raises(WeeklyReportError, match="PGHOST"):
         generate_weekly_report(
             date(2026, 7, 1), date(2026, 7, 12), template, output_dir,
             reference_report=report,

@@ -22,15 +22,12 @@ CONTROL_PANEL_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = CONTROL_PANEL_ROOT.parent
 REFERENCE_REPORT_PATH = PROJECT_ROOT / "django" / "Method_Statement_Interaction_Weekly_Report.py"
 DATABASE_ENVIRONMENT = {
-    "PGHOST": "CONTROL_PANEL_V3_WEEKLY_PGHOST",
-    "PGDATABASE": "CONTROL_PANEL_V3_WEEKLY_PGDATABASE",
-    "PGUSER": "CONTROL_PANEL_V3_WEEKLY_PGUSER",
-    "PGPASSWORD": "CONTROL_PANEL_V3_WEEKLY_PGPASSWORD",
+    "PGHOST": "PGHOST",
+    "PGDATABASE": "PGDATABASE",
+    "PGUSER": "PGUSER",
+    "PGPASSWORD": "PGPASSWORD",
 }
-OPTIONAL_DATABASE_ENVIRONMENT = {
-    "PGPORT": "CONTROL_PANEL_V3_WEEKLY_PGPORT",
-    "PGSSLMODE": "CONTROL_PANEL_V3_WEEKLY_PGSSLMODE",
-}
+OPTIONAL_DATABASE_ENVIRONMENT = ("PGPORT", "PGSSLMODE")
 DEFAULT_REPORTING_TIMEZONE = "Asia/Hong_Kong"
 
 
@@ -55,8 +52,8 @@ def _load_reference_report() -> ModuleType:
         raise WeeklyReportError("Could not load the weekly report implementation.")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    # The source module's default dotenv path belongs to the legacy tree. V3
-    # supplies its own namespaced environment and must never fall back to it.
+    # The V3 builder supplies generic settings from django/.env explicitly;
+    # never let the imported legacy module load dotenv a second time.
     module.load_dotenv = lambda *_args, **_kwargs: None
     return module
 
@@ -64,24 +61,31 @@ def _load_reference_report() -> ModuleType:
 @contextmanager
 def _v3_database_environment() -> Iterator[str]:
     required_values = {
-        database_name: os.getenv(v3_name, "").strip()
-        for database_name, v3_name in DATABASE_ENVIRONMENT.items()
+        database_name: os.getenv(environment_name, "")
+        for database_name, environment_name in DATABASE_ENVIRONMENT.items()
     }
-    missing = [DATABASE_ENVIRONMENT[name] for name, value in required_values.items() if not value]
+    missing = [name for name, value in required_values.items() if not value.strip()]
     if missing:
-        raise WeeklyReportError("Missing V3 weekly database setting(s): " + ", ".join(missing))
+        raise WeeklyReportError("Missing weekly database setting(s): " + ", ".join(missing))
 
-    timezone_name = os.getenv("CONTROL_PANEL_V3_WEEKLY_REPORTING_TIMEZONE", DEFAULT_REPORTING_TIMEZONE).strip()
+    timezone_name = os.getenv("REPORTING_TIMEZONE", DEFAULT_REPORTING_TIMEZONE).strip()
     if not timezone_name:
-        raise WeeklyReportError("CONTROL_PANEL_V3_WEEKLY_REPORTING_TIMEZONE cannot be blank.")
+        raise WeeklyReportError("REPORTING_TIMEZONE cannot be blank.")
     try:
         ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError as error:
-        raise WeeklyReportError(f"Unknown CONTROL_PANEL_V3_WEEKLY_REPORTING_TIMEZONE: {timezone_name}") from error
+    except (ValueError, ZoneInfoNotFoundError) as error:
+        raise WeeklyReportError("REPORTING_TIMEZONE is not a recognized timezone.") from error
 
     mapped_values = dict(required_values)
-    mapped_values["PGPORT"] = os.getenv(OPTIONAL_DATABASE_ENVIRONMENT["PGPORT"], "5432").strip() or "5432"
-    sslmode = os.getenv(OPTIONAL_DATABASE_ENVIRONMENT["PGSSLMODE"], "").strip()
+    port_value = os.getenv("PGPORT", "5432").strip() or "5432"
+    try:
+        port = int(port_value)
+    except ValueError as error:
+        raise WeeklyReportError("PGPORT must be a whole number from 1 to 65535.") from error
+    if not 1 <= port <= 65535:
+        raise WeeklyReportError("PGPORT must be a whole number from 1 to 65535.")
+    mapped_values["PGPORT"] = str(port)
+    sslmode = os.getenv("PGSSLMODE", "").strip()
     if sslmode:
         mapped_values["PGSSLMODE"] = sslmode
     mapped_values["REPORTING_TIMEZONE"] = timezone_name

@@ -7,17 +7,64 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 CONTROL_PANEL_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = CONTROL_PANEL_ROOT.parent
 V1_ROOT = PROJECT_ROOT / "control_panel"
 V2_ROOT = PROJECT_ROOT / "control_panel_v2"
+DJANGO_ENV_PATH = PROJECT_ROOT / "django" / ".env"
+WEEKLY_REQUIRED_ENV_KEYS = ("PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD")
 
 
 class ConfigurationError(ValueError):
     """Raised when V3 settings violate the local configuration contract."""
+
+
+def load_weekly_report_environment(env_path: Path | None = None) -> dict[str, str]:
+    """Read and validate weekly-report settings without changing process env."""
+    path = env_path or DJANGO_ENV_PATH
+    try:
+        parsed = dotenv_values(path, interpolate=False)
+    except (OSError, UnicodeError) as error:
+        raise ConfigurationError("Could not read weekly-report settings from django/.env.") from error
+
+    missing = [
+        key for key in WEEKLY_REQUIRED_ENV_KEYS
+        if not isinstance(parsed.get(key), str) or not parsed[key].strip()
+    ]
+    if missing:
+        raise ConfigurationError("Missing or blank django/.env setting(s): " + ", ".join(missing))
+
+    port_value = parsed.get("PGPORT")
+    port_text = port_value.strip() if isinstance(port_value, str) else ""
+    if not port_text:
+        port_text = "5432"
+    try:
+        port = int(port_text)
+    except ValueError as error:
+        raise ConfigurationError("django/.env PGPORT must be a whole number from 1 to 65535.") from error
+    if not 1 <= port <= 65535:
+        raise ConfigurationError("django/.env PGPORT must be a whole number from 1 to 65535.")
+
+    timezone_value = parsed.get("REPORTING_TIMEZONE")
+    timezone_name = "Asia/Hong_Kong" if timezone_value is None else timezone_value.strip()
+    if not timezone_name:
+        raise ConfigurationError("django/.env REPORTING_TIMEZONE must not be blank.")
+    try:
+        ZoneInfo(timezone_name)
+    except (ValueError, ZoneInfoNotFoundError) as error:
+        raise ConfigurationError("django/.env REPORTING_TIMEZONE is not a recognized timezone.") from error
+
+    result = {key: parsed[key] for key in WEEKLY_REQUIRED_ENV_KEYS}
+    result["PGPORT"] = str(port)
+    sslmode = parsed.get("PGSSLMODE")
+    if isinstance(sslmode, str) and sslmode.strip():
+        result["PGSSLMODE"] = sslmode.strip()
+    result["REPORTING_TIMEZONE"] = timezone_name
+    return result
 
 
 def _path_setting(name: str, default: str) -> Path:
@@ -44,6 +91,17 @@ def _positive_int(name: str, default: int) -> int:
         raise ConfigurationError(f"{name} must be a whole number; got {value!r}.") from error
     if result <= 0:
         raise ConfigurationError(f"{name} must be greater than zero.")
+    return result
+
+
+def _nonnegative_int(name: str, default: int) -> int:
+    value = os.getenv(name, str(default))
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be a whole number; got {value!r}.") from error
+    if result < 0:
+        raise ConfigurationError(f"{name} must be zero or greater.")
     return result
 
 
@@ -77,6 +135,11 @@ class Settings:
     readiness_workbook_path: Path = CONTROL_PANEL_ROOT / "working" / "readiness" / "SMM_KMS_PM_Master_Document.xlsx"
     weekly_template_path: Path = CONTROL_PANEL_ROOT / "working" / "templates" / "Method_Statement_Interaction_Weekly_Report_template.xlsx"
     summary_layout_sheet: str = "(WIP) 1 Jul - 12 Jul"
+    step0_headed: bool = True
+    step0_login_if_needed: bool = True
+    step0_timeout_seconds: int = 60
+    step0_auth_timeout_seconds: int = 120
+    step0_failure_browser_hold_seconds: int = 120
 
     @property
     def python_executable(self) -> Path:
@@ -107,10 +170,6 @@ class Settings:
         return CONTROL_PANEL_ROOT / "working" / "smm-backups"
 
     @property
-    def weekly_reporting_timezone(self) -> str:
-        return os.getenv("CONTROL_PANEL_V3_WEEKLY_REPORTING_TIMEZONE", "Asia/Hong_Kong").strip()
-
-    @property
     def database_path(self) -> Path:
         return self.data_dir / "history.sqlite3"
 
@@ -121,6 +180,27 @@ class Settings:
     @property
     def archive_database_path(self) -> Path:
         return self.archive_dir / "history.sqlite3"
+
+    def validate_step0(self) -> list[str]:
+        errors: list[str] = []
+        for name, value in (("CONTROL_PANEL_V3_STEP0_HEADED", self.step0_headed),
+                            ("CONTROL_PANEL_V3_STEP0_LOGIN_IF_NEEDED", self.step0_login_if_needed)):
+            if not isinstance(value, bool):
+                errors.append(f"{name} must be true or false.")
+        durations = (
+            ("CONTROL_PANEL_V3_STEP0_TIMEOUT_SECONDS", self.step0_timeout_seconds, 1),
+            ("CONTROL_PANEL_V3_STEP0_AUTH_TIMEOUT_SECONDS", self.step0_auth_timeout_seconds, 1),
+            ("CONTROL_PANEL_V3_STEP0_FAILURE_BROWSER_HOLD_SECONDS", self.step0_failure_browser_hold_seconds, 0),
+        )
+        for name, value, minimum in durations:
+            if type(value) is not int or value < minimum:
+                errors.append(f"{name} must be a whole number {'greater than zero' if minimum else 'zero or greater'}.")
+        # A minimum budget, not an upper bound: a run can perform many operations.
+        if not errors and type(self.job_timeout_seconds) is int:
+            minimum_budget = self.step0_timeout_seconds + self.step0_auth_timeout_seconds + self.step0_failure_browser_hold_seconds
+            if self.job_timeout_seconds <= minimum_budget:
+                errors.append("CONTROL_PANEL_V3_JOB_TIMEOUT_SECONDS must exceed the sum of Step 0 operation, authentication and failure-hold timeouts.")
+        return errors
 
     def validate(self) -> list[str]:
         errors: list[str] = []
@@ -184,6 +264,7 @@ class Settings:
             errors.append("CONTROL_PANEL_V3_WORKER_TIMEOUT_SECONDS must be greater than zero.")
         if self.excel_filter_timeout_seconds <= 0:
             errors.append("CONTROL_PANEL_V3_EXCEL_FILTER_TIMEOUT_SECONDS must be greater than zero.")
+        errors.extend(self.validate_step0())
         return errors
 
     def validate_for_workflow(self, workflow_id: str) -> list[str]:
@@ -195,6 +276,8 @@ class Settings:
             errors.append("CONTROL_PANEL_V3_PORT must not use V2's port 8766.")
         if self.job_timeout_seconds <= 0:
             errors.append("CONTROL_PANEL_V3_JOB_TIMEOUT_SECONDS must be greater than zero.")
+        if workflow_id == "ecm-step-0":
+            errors.extend(self.validate_step0())
         protected = (V1_ROOT.resolve(), V2_ROOT.resolve())
         writable_roots = (self.data_dir, self.archive_dir, self.smm_backup_dir, self.csv_dir, self.ecm_output_dir,
                           self.smm_output_dir, self.readiness_workbook_path, self.django_output_dir, self.edge_profile_dir)
@@ -290,4 +373,9 @@ def load_settings() -> Settings:
         ecm_url=os.getenv("CONTROL_PANEL_V3_ECM_URL", "https://ecm.chunwo.com/navigator/").strip(),
         worker_timeout_seconds=_positive_int("CONTROL_PANEL_V3_WORKER_TIMEOUT_SECONDS", 180),
         excel_filter_timeout_seconds=_positive_int("CONTROL_PANEL_V3_EXCEL_FILTER_TIMEOUT_SECONDS", 90),
+        step0_headed=_boolean("CONTROL_PANEL_V3_STEP0_HEADED", True),
+        step0_login_if_needed=_boolean("CONTROL_PANEL_V3_STEP0_LOGIN_IF_NEEDED", True),
+        step0_timeout_seconds=_positive_int("CONTROL_PANEL_V3_STEP0_TIMEOUT_SECONDS", 60),
+        step0_auth_timeout_seconds=_positive_int("CONTROL_PANEL_V3_STEP0_AUTH_TIMEOUT_SECONDS", 120),
+        step0_failure_browser_hold_seconds=_nonnegative_int("CONTROL_PANEL_V3_STEP0_FAILURE_BROWSER_HOLD_SECONDS", 120),
     )

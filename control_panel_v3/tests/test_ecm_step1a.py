@@ -113,6 +113,28 @@ def test_step1a_consumes_exact_csv_backs_up_and_preserves_unrelated_sheets(tmp_p
         workbook.close()
 
 
+def test_step1a_removes_matching_parenthesized_revision_from_column_p(tmp_path: Path) -> None:
+    csv_path, readiness, workbook_path, template, backup = (tmp_path / name for name in (
+        "period.csv", "readiness.xlsx", "ECM_Record.xlsx", "template.xlsx", "backup.xlsx"
+    ))
+    project = "CWCRCC(ND202404)JV/1131/CSF"
+    row = _row("MS/0283-2025(F", project=project)
+    row[3] = "F"
+    row[8] = "CWCRCC(ND202404)JV/1131/CSF/MS/0283-2025(F"
+    _csv(csv_path, [row])
+    _readiness(readiness, [(1131, "Yes")])
+    _template(template)
+    _template(workbook_path)
+
+    run_step1a(csv_path, readiness, workbook_path, template, backup, date(2026, 8, 1), date(2026, 8, 1))
+
+    workbook = load_workbook(workbook_path)
+    try:
+        assert workbook.active.cell(2, 16).value == "CWCRCC(ND202404)JV/1131/CSF/MS/0283-2025"
+    finally:
+        workbook.close()
+
+
 def test_step1a_initializes_from_template_and_rejects_bad_input_without_mutation(tmp_path: Path) -> None:
     csv_path, readiness, workbook_path, template, backup = (tmp_path / name for name in (
         "period.csv", "readiness.xlsx", "ECM_Record.xlsx", "template.xlsx", "backup.xlsx"

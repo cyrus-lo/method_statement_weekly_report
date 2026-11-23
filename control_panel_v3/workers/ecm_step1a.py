@@ -20,6 +20,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Border
 
 from .properties_csv import CsvValidationError, validate_properties_csv
+from .reference_normalization import outgoing_reference_without_revision
 
 CONTROL_PANEL_ROOT = Path(__file__).resolve().parents[1]
 
@@ -172,12 +173,6 @@ def apply_preliminary_rules(records: list[EcmRecord], readiness: dict[int, bool]
         record.count = "N" if record.reasons else ""
 
 
-def _without_revision(reference: str, revision: str) -> str:
-    suffix = f"/{revision.strip()}"
-    value = reference.strip()
-    return value[:-len(suffix)] if revision.strip() and value.endswith(suffix) else value
-
-
 def _copy_row_style(sheet: Any, source_row: int, target_row: int) -> None:
     for column in range(1, sheet.max_column + 1):
         source, target = sheet.cell(source_row, column), sheet.cell(target_row, column)
@@ -218,7 +213,7 @@ def _build_updated_workbook(source_path: Path, start: date, end: date, records: 
             for col, value in enumerate(values, start=1):
                 sheet.cell(row_number, col).value = value
             sheet.cell(row_number, 13).value = f"Duplicate with its version {highest[record.normalized_name]}" if "superseded_major_version" in record.reasons else None
-            sheet.cell(row_number, OUTGOING_REFERENCE_COLUMN).value = _without_revision(record.outgoing_reference, record.document_revision) or None
+            sheet.cell(row_number, OUTGOING_REFERENCE_COLUMN).value = outgoing_reference_without_revision(record.outgoing_reference, record.document_revision) or None
         for row in range(len(ordered) + 2, sheet.max_row + 1):
             for col in range(1, sheet.max_column + 1):
                 sheet.cell(row, col).border = Border()

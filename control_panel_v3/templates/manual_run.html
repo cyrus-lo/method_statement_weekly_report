@@ -1,3 +1,10 @@
 {% extends "base.html" %}
 {% block title %}V3 Manual Run{% endblock %}
-{% block content %}<section class="hero"><p class="eyebrow">GUIDED OPERATIONS</p><h1>Manual Run</h1><p>Period workflows must be started from Report History to preserve gates and audit context.</p></section><section class="card"><p>Standalone execution is not enabled in V3.</p></section>{% endblock %}
+{% block content %}
+<section class="hero"><p class="eyebrow">GUIDED OPERATIONS</p><h1>Manual Run</h1><p>Standalone execution is not enabled in V3. Start period-bound workflows from Report History so workflow gates and audit context are preserved.</p></section>
+<section class="notice" role="note">These controls are intentionally disabled. V3 requires a reporting period and enforces the ECM sequence before a workflow can run.</section>
+<section class="workflow-cards" aria-label="Available workflows">
+{% for workflow in workflows %}<article class="card workflow-card"><div><p class="eyebrow">{% if workflow.id == 'weekly-report' %}INDEPENDENT REPORT{% else %}ECM PERIOD WORKFLOW{% endif %}</p><h2>{{ workflow.label }}</h2><p>{{ workflow.description }}</p><small>{{ workflow.next_action }}</small></div><button type="button" disabled>Start from Report History</button></article>{% endfor %}
+</section>
+<a class="button" href="/report-history">Open Report History</a>
+{% endblock %}
